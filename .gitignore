@@ -1,0 +1,24 @@
+# Build and generated files
+build/
+install/
+log/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# CMake / compiler artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.obj
+*.exe
+*.pdb
+*.ilk
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
