@@ -2,6 +2,7 @@
 
 #include <angles/angles.h>
 
+#include <algorithm>
 #include <chrono>
 #include <clocale>
 #include <cmath>
@@ -22,7 +23,6 @@ namespace
 constexpr double kDefaultTimerPeriodSec = 0.05;
 constexpr uint8_t kVisionModeIdle = 0;
 constexpr uint8_t kVisionModeBlackCircle = 1;
-constexpr uint8_t kVisionModeAprilTag = 2;
 
 const char * phaseToString(TaskPhase phase)
 {
@@ -36,6 +36,7 @@ const char * phaseToString(TaskPhase phase)
     case TaskPhase::DropArriving: return "DropArriving";
     case TaskPhase::DropAligning: return "DropAligning";
     case TaskPhase::DropActing: return "DropActing";
+    case TaskPhase::PillarInspecting: return "PillarInspecting";
   }
   return "?";
 }
@@ -45,7 +46,12 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
 : rclcpp::Node("route_target_publisher", options),
   current_idx_(std::numeric_limits<std::size_t>::max()),
   has_height_(false),
+  has_ground_height_(false),
+  has_pillar_height_(false),
+  height_reference_mode_(0),
   current_height_cm_(0.0),
+  ground_height_cm_(0.0),
+  pillar_height_cm_(0.0),
   visual_align_pixel_threshold_(0.0),
   visual_align_required_frames_(0),
   visual_takeover_timeout_sec_(0.0),
@@ -58,6 +64,8 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   pickup_observe_sec_(0.0),
   pickup_max_attempts_(0),
   circle_lost_window_sec_(0.0),
+  pillar_inspect_altitude_cm_(0.0),
+  pillar_inspect_observe_sec_(0.0),
   drop_altitude_cm_(0.0),
   drop_align_altitude_cm_(0.0),
   drop_servo_down_duration_sec_(0.0),
@@ -65,6 +73,8 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   visual_takeover_active_(false),
   has_fine_data_(false),
   pickup_observed_fine_data_(false),
+  pillar_inspect_observing_(false),
+  pillar_inspect_seen_circle_(false),
   fine_error_x_px_(0),
   fine_error_y_px_(0),
   mission_complete_sent_(false),
@@ -74,7 +84,14 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   magnet_sent_in_phase_(false),
   aligned_x_cm_(0.0),
   aligned_y_cm_(0.0),
-  has_aligned_position_(false)
+  has_aligned_position_(false),
+  pillar_mission_built_(false),
+  next_pillar_inspect_idx_(0),
+  empty_pillar_idx_(-1),
+  pickup_pillar_idx_(-1),
+  pickup_target_added_(false),
+  drop_target_added_(false),
+  return_home_added_(false)
 {
   pos_tol_cm_ = declare_parameter("position_tolerance_cm", 9.0);
   yaw_tol_deg_ = declare_parameter("yaw_tolerance_deg", 5.0);
@@ -98,6 +115,9 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   pickup_observe_sec_ = declare_parameter("pickup_observe_sec", pickup_check_observe_sec_);
   pickup_max_attempts_ = declare_parameter("pickup_max_attempts", 3);
   circle_lost_window_sec_ = declare_parameter("circle_lost_window_sec", 1.0);
+  pillar_inspect_altitude_cm_ =
+    declare_parameter("pillar_inspect_altitude_cm", pickup_align_altitude_cm_);
+  pillar_inspect_observe_sec_ = declare_parameter("pillar_inspect_observe_sec", 2.0);
   // 投放参数（独立）
   drop_altitude_cm_ = declare_parameter("drop_altitude_cm", 40.0);
   drop_align_altitude_cm_ = declare_parameter("drop_align_altitude_cm", 40.0);
@@ -114,6 +134,8 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
     create_publisher<std_msgs::msg::Bool>("/visual_takeover_active", durable_qos);
   vision_target_mode_pub_ =
     create_publisher<std_msgs::msg::UInt8>(vision_mode_topic_, durable_qos);
+  height_reference_mode_pub_ =
+    create_publisher<std_msgs::msg::UInt8>("/height_reference_mode", durable_qos);
   servo_control_pub_ =
     create_publisher<std_msgs::msg::UInt8>("/servo_control", rclcpp::QoS(10).reliable());
   electromagnet_control_pub_ =
@@ -129,10 +151,18 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
   drop_failed_pub_ =
     create_publisher<std_msgs::msg::Empty>("/drop_failed", rclcpp::QoS(10).reliable());
 
-  height_sub_ = create_subscription<std_msgs::msg::Int16>(
-    "/height",
+  ground_height_sub_ = create_subscription<std_msgs::msg::Int16>(
+    "/laser_array/ground_height",
     rclcpp::QoS(10),
-    std::bind(&RouteTargetPublisherNode::heightCallback, this, std::placeholders::_1));
+    std::bind(&RouteTargetPublisherNode::groundHeightCallback, this, std::placeholders::_1));
+  pillar_height_sub_ = create_subscription<std_msgs::msg::Float32>(
+    "/laser_array/min_range",
+    rclcpp::QoS(10),
+    std::bind(&RouteTargetPublisherNode::pillarHeightCallback, this, std::placeholders::_1));
+  detected_pillars_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
+    "/detected_pillars",
+    rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable(),
+    std::bind(&RouteTargetPublisherNode::detectedPillarsCallback, this, std::placeholders::_1));
   fine_data_sub_ = create_subscription<std_msgs::msg::Int32MultiArray>(
     "/fine_data",
     rclcpp::QoS(10),
@@ -151,6 +181,7 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
 
   publishVisualTakeoverState(false);
   publishVisionTargetMode(kVisionModeIdle);
+  publishHeightReferenceMode(0);
 
   RCLCPP_INFO(
     get_logger(),
@@ -177,6 +208,10 @@ RouteTargetPublisherNode::RouteTargetPublisherNode(const rclcpp::NodeOptions & o
     "Drop: legacy_z=%.1fcm align_z=%.1fcm servo_down=%.1fs magnet_off_delay=%.1fs",
     drop_altitude_cm_, drop_align_altitude_cm_,
     drop_servo_down_duration_sec_, drop_magnet_off_delay_sec_);
+  RCLCPP_INFO(
+    get_logger(),
+    "Pillar mission: inspect_z=%.1fcm inspect_observe=%.1fs",
+    pillar_inspect_altitude_cm_, pillar_inspect_observe_sec_);
 }
 
 void RouteTargetPublisherNode::addTarget(const Target & target)
@@ -191,6 +226,14 @@ void RouteTargetPublisherNode::addTarget(const Target & target)
     current_idx_ = was_completed ? targets_.size() - 1 : 0;
     publishCurrent();
   }
+}
+
+void RouteTargetPublisherNode::clearTargets()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  targets_.clear();
+  current_idx_ = std::numeric_limits<std::size_t>::max();
+  mission_complete_sent_ = false;
 }
 
 std::size_t RouteTargetPublisherNode::currentIndex() const
@@ -260,6 +303,9 @@ Target RouteTargetPublisherNode::getPublishedTarget(const Target & target) const
       }
       published_target.z_cm = pickup_check_altitude_cm_;
       break;
+    case TaskPhase::PillarInspecting:
+      published_target.z_cm = pillar_inspect_altitude_cm_;
+      break;
     case TaskPhase::PickupDescending:
       // 下降：z=抓取高度；XY 仍给出对准位置作为参考，实际 XY 由视觉接管修正
       if (has_aligned_position_) {
@@ -277,8 +323,10 @@ Target RouteTargetPublisherNode::getPublishedTarget(const Target & target) const
       published_target.z_cm = pickup_grab_altitude_cm_;
       break;
     case TaskPhase::DropArriving:
-    case TaskPhase::DropAligning:
     case TaskPhase::DropActing:
+      published_target.z_cm = drop_align_altitude_cm_;
+      break;
+    case TaskPhase::DropAligning:
       published_target.z_cm = drop_align_altitude_cm_;
       break;
     case TaskPhase::Idle:
@@ -289,14 +337,89 @@ Target RouteTargetPublisherNode::getPublishedTarget(const Target & target) const
   return published_target;
 }
 
-void RouteTargetPublisherNode::heightCallback(const std_msgs::msg::Int16::SharedPtr msg)
+void RouteTargetPublisherNode::groundHeightCallback(const std_msgs::msg::Int16::SharedPtr msg)
 {
-  current_height_cm_ = static_cast<double>(msg->data);
-  has_height_ = true;
+  ground_height_cm_ = static_cast<double>(msg->data);
+  has_ground_height_ = true;
+  if (height_reference_mode_ == 0) {
+    current_height_cm_ = ground_height_cm_;
+    has_height_ = true;
+  }
   RCLCPP_DEBUG_THROTTLE(
     get_logger(), *get_clock(), 1000,
-    "Route monitor received /height: %.1fcm",
-    current_height_cm_);
+    "Route monitor received /laser_array/ground_height: %.1fcm",
+    ground_height_cm_);
+}
+
+void RouteTargetPublisherNode::pillarHeightCallback(const std_msgs::msg::Float32::SharedPtr msg)
+{
+  pillar_height_cm_ = static_cast<double>(msg->data) * 100.0;
+  has_pillar_height_ = true;
+  if (height_reference_mode_ == 1) {
+    current_height_cm_ = pillar_height_cm_;
+    has_height_ = true;
+  }
+  RCLCPP_DEBUG_THROTTLE(
+    get_logger(), *get_clock(), 1000,
+    "Route monitor received /laser_array/min_range: %.1fcm",
+    pillar_height_cm_);
+}
+
+void RouteTargetPublisherNode::detectedPillarsCallback(
+  const std_msgs::msg::Float32MultiArray::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (pillar_mission_built_) {
+    return;
+  }
+  if (msg->data.size() < 8 || msg->data.size() % 2 != 0) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "/detected_pillars requires at least 4 coordinate pairs [x1,y1,...]. Got %zu values.",
+      msg->data.size());
+    return;
+  }
+
+  pillar_targets_.clear();
+  const std::size_t pillar_count = std::min<std::size_t>(4, msg->data.size() / 2);
+  for (std::size_t i = 0; i < pillar_count; ++i) {
+    PillarTarget pillar;
+    pillar.x_cm = static_cast<double>(msg->data[i * 2]) * 100.0;
+    pillar.y_cm = static_cast<double>(msg->data[i * 2 + 1]) * 100.0;
+    pillar_targets_.push_back(pillar);
+  }
+  std::sort(
+    pillar_targets_.begin(), pillar_targets_.end(),
+    [](const PillarTarget & a, const PillarTarget & b) {
+      return std::hypot(a.x_cm, a.y_cm) < std::hypot(b.x_cm, b.y_cm);
+    });
+
+  targets_.clear();
+  current_idx_ = std::numeric_limits<std::size_t>::max();
+  mission_complete_sent_ = false;
+  next_pillar_inspect_idx_ = 0;
+  empty_pillar_idx_ = -1;
+  pickup_pillar_idx_ = -1;
+  pickup_target_added_ = false;
+  drop_target_added_ = false;
+  return_home_added_ = false;
+  pillar_mission_built_ = true;
+
+  targets_.push_back(Target{0.0, 0.0, pickup_check_altitude_cm_, 0.0, 1});
+  appendNextInspectionTarget();
+  current_idx_ = 0;
+  publishTarget(getPublishedTarget(targets_[current_idx_]), true);
+
+  RCLCPP_INFO(get_logger(), "Built pillar mission from %zu pillars.", pillar_targets_.size());
+  for (std::size_t i = 0; i < pillar_targets_.size(); ++i) {
+    RCLCPP_INFO(
+      get_logger(),
+      "Pillar order %zu: x=%.1fcm y=%.1fcm distance=%.1fcm",
+      i + 1,
+      pillar_targets_[i].x_cm,
+      pillar_targets_[i].y_cm,
+      std::hypot(pillar_targets_[i].x_cm, pillar_targets_[i].y_cm));
+  }
 }
 
 void RouteTargetPublisherNode::fineDataCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg)
@@ -312,6 +435,9 @@ void RouteTargetPublisherNode::fineDataCallback(const std_msgs::msg::Int32MultiA
   last_fine_data_time_ = now();
   if (phase_ == TaskPhase::PickupObserving) {
     pickup_observed_fine_data_ = true;
+  }
+  if (phase_ == TaskPhase::PillarInspecting && pillar_inspect_observing_) {
+    pillar_inspect_seen_circle_ = true;
   }
 }
 
@@ -405,6 +531,67 @@ void RouteTargetPublisherNode::advanceToNextTarget()
   }
 }
 
+void RouteTargetPublisherNode::appendNextInspectionTarget()
+{
+  if (next_pillar_inspect_idx_ >= pillar_targets_.size()) {
+    RCLCPP_WARN(get_logger(), "No more pillars to inspect.");
+    return;
+  }
+
+  const auto & pillar = pillar_targets_[next_pillar_inspect_idx_];
+  targets_.push_back(Target{pillar.x_cm, pillar.y_cm, pickup_check_altitude_cm_, 0.0, 4});
+  RCLCPP_INFO(
+    get_logger(),
+    "Queued pillar inspection %zu/%zu at x=%.1fcm y=%.1fcm",
+    next_pillar_inspect_idx_ + 1,
+    pillar_targets_.size(),
+    pillar.x_cm,
+    pillar.y_cm);
+  ++next_pillar_inspect_idx_;
+}
+
+void RouteTargetPublisherNode::schedulePickupTargetIfReady()
+{
+  if (pickup_target_added_ || pickup_pillar_idx_ < 0 || empty_pillar_idx_ < 0) {
+    return;
+  }
+  const auto & pickup_pillar = pillar_targets_[static_cast<std::size_t>(pickup_pillar_idx_)];
+  targets_.push_back(Target{pickup_pillar.x_cm, pickup_pillar.y_cm, pickup_check_altitude_cm_, 0.0, 2});
+  pickup_target_added_ = true;
+  RCLCPP_INFO(
+    get_logger(),
+    "Queued pickup pillar at x=%.1fcm y=%.1fcm; empty pillar index=%d.",
+    pickup_pillar.x_cm,
+    pickup_pillar.y_cm,
+    empty_pillar_idx_);
+}
+
+void RouteTargetPublisherNode::scheduleDropTargetIfReady()
+{
+  if (drop_target_added_ || empty_pillar_idx_ < 0) {
+    return;
+  }
+  const auto & empty_pillar = pillar_targets_[static_cast<std::size_t>(empty_pillar_idx_)];
+  targets_.push_back(Target{empty_pillar.x_cm, empty_pillar.y_cm, pickup_check_altitude_cm_, 0.0, 3});
+  drop_target_added_ = true;
+  RCLCPP_INFO(
+    get_logger(),
+    "Queued drop pillar at x=%.1fcm y=%.1fcm.",
+    empty_pillar.x_cm,
+    empty_pillar.y_cm);
+}
+
+void RouteTargetPublisherNode::scheduleReturnHomeTargets()
+{
+  if (return_home_added_) {
+    return;
+  }
+  targets_.push_back(Target{0.0, 0.0, pickup_check_altitude_cm_, 0.0, 1});
+  targets_.push_back(Target{0.0, 0.0, 0.0, 0.0, 1});
+  return_home_added_ = true;
+  RCLCPP_INFO(get_logger(), "Queued return home and landing targets.");
+}
+
 void RouteTargetPublisherNode::publishVisualTakeoverState(bool active)
 {
   std_msgs::msg::Bool msg;
@@ -417,6 +604,27 @@ void RouteTargetPublisherNode::publishVisionTargetMode(uint8_t mode)
   std_msgs::msg::UInt8 msg;
   msg.data = mode;
   vision_target_mode_pub_->publish(msg);
+}
+
+void RouteTargetPublisherNode::publishHeightReferenceMode(uint8_t mode)
+{
+  const uint8_t normalized_mode = mode == 1 ? 1 : 0;
+  height_reference_mode_ = normalized_mode;
+  if (height_reference_mode_ == 1) {
+    has_height_ = has_pillar_height_;
+    current_height_cm_ = pillar_height_cm_;
+  } else {
+    has_height_ = has_ground_height_;
+    current_height_cm_ = ground_height_cm_;
+  }
+
+  std_msgs::msg::UInt8 msg;
+  msg.data = height_reference_mode_;
+  height_reference_mode_pub_->publish(msg);
+  RCLCPP_INFO(
+    get_logger(),
+    "Height reference mode: %s",
+    height_reference_mode_ == 1 ? "pillar" : "ground");
 }
 
 void RouteTargetPublisherNode::publishServoControl(uint8_t state)
@@ -452,24 +660,36 @@ void RouteTargetPublisherNode::setPhase(TaskPhase phase, const rclcpp::Time & no
     phase == TaskPhase::PickupAligning ||
     phase == TaskPhase::PickupDescending ||
     phase == TaskPhase::PickupObserving;
+  const bool pillar_inspection_phase = phase == TaskPhase::PillarInspecting;
   const bool takeover =
     pickup_visual_phase ||
-    phase == TaskPhase::DropAligning;
+    pillar_inspection_phase;
   if (visual_takeover_active_ != takeover) {
     visual_takeover_active_ = takeover;
     publishVisualTakeoverState(takeover);
   }
 
   uint8_t vision_mode = kVisionModeIdle;
-  if (pickup_visual_phase) {
+  if (pickup_visual_phase || pillar_inspection_phase) {
     vision_mode = kVisionModeBlackCircle;
-  } else if (phase == TaskPhase::DropAligning) {
-    vision_mode = kVisionModeAprilTag;
   }
   publishVisionTargetMode(vision_mode);
 
+  const bool pillar_height_phase =
+    phase == TaskPhase::PillarInspecting ||
+    phase == TaskPhase::PickupAligning ||
+    phase == TaskPhase::PickupDescending ||
+    phase == TaskPhase::PickupHolding ||
+    phase == TaskPhase::PickupAscending ||
+    phase == TaskPhase::PickupObserving ||
+    phase == TaskPhase::DropArriving ||
+    phase == TaskPhase::DropActing;
+  publishHeightReferenceMode(pillar_height_phase ? 1 : 0);
+
   // 进入 PickupAligning 时重置帧计数 + 视觉超时起点（重试场景必须重置）
-  if (phase == TaskPhase::PickupAligning || phase == TaskPhase::DropAligning) {
+  if (phase == TaskPhase::PickupAligning || phase == TaskPhase::DropAligning ||
+    phase == TaskPhase::PillarInspecting)
+  {
     aligned_frame_count_ = 0;
     visual_takeover_start_time_ = now_time;
     has_fine_data_ = false;
@@ -484,6 +704,12 @@ void RouteTargetPublisherNode::setPhase(TaskPhase phase, const rclcpp::Time & no
     fine_error_x_px_ = 0;
     fine_error_y_px_ = 0;
     last_fine_data_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+  }
+
+  if (phase == TaskPhase::PillarInspecting) {
+    pillar_inspect_observing_ = false;
+    pillar_inspect_seen_circle_ = false;
+    pillar_inspect_observe_start_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
   }
 
   // 下发新阶段对应的目标位置（z 由 getPublishedTarget 调整）
@@ -553,7 +779,7 @@ void RouteTargetPublisherNode::monitorTimerCallback()
       const double dy_now = target.y_cm - y_cm;
       const double dxy_now = std::hypot(dx_now, dy_now);
       const double dz_now = target.z_cm - z_cm;
-      const bool is_task_target = target.type == 2 || target.type == 3;
+      const bool is_task_target = target.type == 2 || target.type == 3 || target.type == 4;
       const bool reached = is_task_target
         ? dxy_now <= pos_tol_cm_
         : isReached(target, x_cm, y_cm, z_cm, yaw_deg);
@@ -587,10 +813,71 @@ void RouteTargetPublisherNode::monitorTimerCallback()
         has_aligned_position_ = false;
         setPhase(TaskPhase::PickupAligning, now_time);
       } else if (target.type == 3) {
-        setPhase(TaskPhase::DropAligning, now_time);
+        setPhase(TaskPhase::DropArriving, now_time);
+      } else if (target.type == 4) {
+        setPhase(TaskPhase::PillarInspecting, now_time);
       } else {
         advanceToNextTarget();
       }
+      return;
+    }
+
+    case TaskPhase::PillarInspecting: {
+      const double height_error_cm = pillar_inspect_altitude_cm_ - z_cm;
+      const bool height_ok = std::fabs(height_error_cm) <= height_tol_cm_;
+      RCLCPP_DEBUG_THROTTLE(
+        get_logger(), *get_clock(), 500,
+        "PillarInspecting %zu: z=%.1fcm target=%.1fcm err=%.1fcm observing=%s seen=%s",
+        current_idx_, z_cm, pillar_inspect_altitude_cm_, height_error_cm,
+        pillar_inspect_observing_ ? "true" : "false",
+        pillar_inspect_seen_circle_ ? "true" : "false");
+
+      if (!height_ok) {
+        return;
+      }
+
+      if (!pillar_inspect_observing_) {
+        pillar_inspect_observing_ = true;
+        pillar_inspect_seen_circle_ = false;
+        has_fine_data_ = false;
+        fine_error_x_px_ = 0;
+        fine_error_y_px_ = 0;
+        last_fine_data_time_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+        pillar_inspect_observe_start_time_ = now_time;
+        RCLCPP_INFO(get_logger(), "Started pillar visual inspection at target %zu.", current_idx_);
+        return;
+      }
+
+      const double observe_elapsed =
+        (now_time - pillar_inspect_observe_start_time_).seconds();
+      if (observe_elapsed < pillar_inspect_observe_sec_) {
+        return;
+      }
+
+      const std::size_t inspected_idx =
+        next_pillar_inspect_idx_ == 0 ? 0 : next_pillar_inspect_idx_ - 1;
+      if (inspected_idx < pillar_targets_.size()) {
+        pillar_targets_[inspected_idx].inspected = true;
+        pillar_targets_[inspected_idx].has_circle = pillar_inspect_seen_circle_;
+        if (pillar_inspect_seen_circle_) {
+          if (pickup_pillar_idx_ < 0) {
+            pickup_pillar_idx_ = static_cast<int>(inspected_idx);
+          }
+          RCLCPP_INFO(get_logger(), "Pillar %zu has a disk.", inspected_idx + 1);
+        } else {
+          if (empty_pillar_idx_ < 0) {
+            empty_pillar_idx_ = static_cast<int>(inspected_idx);
+          }
+          RCLCPP_INFO(get_logger(), "Pillar %zu is empty.", inspected_idx + 1);
+        }
+      }
+
+      schedulePickupTargetIfReady();
+      if (!pickup_target_added_) {
+        appendNextInspectionTarget();
+      }
+      setPhase(TaskPhase::Idle, now_time);
+      advanceToNextTarget();
       return;
     }
 
@@ -718,6 +1005,7 @@ void RouteTargetPublisherNode::monitorTimerCallback()
           pickup_done_pub_->publish(empty_msg);
         }
         has_aligned_position_ = false;  // 抓取成功，清掉锁位
+        scheduleDropTargetIfReady();
         setPhase(TaskPhase::Idle, now_time);
         advanceToNextTarget();
         return;
@@ -764,7 +1052,9 @@ void RouteTargetPublisherNode::monitorTimerCallback()
       Target drop_target = target;
       drop_target.z_cm = drop_align_altitude_cm_;
       if (isReached(drop_target, x_cm, y_cm, z_cm, yaw_deg)) {
-        setPhase(TaskPhase::DropAligning, now_time);
+        RCLCPP_INFO(get_logger(), "Drop pillar reached. Starting direct release action.");
+        publishServoControl(0x01);
+        setPhase(TaskPhase::DropActing, now_time);
       }
       return;
     }
@@ -852,6 +1142,7 @@ void RouteTargetPublisherNode::monitorTimerCallback()
           std_msgs::msg::Empty empty_msg;
           drop_done_pub_->publish(empty_msg);
         }
+        scheduleReturnHomeTargets();
         setPhase(TaskPhase::Idle, now_time);
         advanceToNextTarget();
       }
@@ -883,10 +1174,15 @@ RouteTestNode::RouteTestNode(
   route_node_(route_node)
 {
   std::setlocale(LC_ALL, "");
+  RCLCPP_INFO(
+    get_logger(),
+    "Pillar mission mode active. Waiting for /detected_pillars before loading targets.");
 
   const auto route = buildRoute();
   if (route.empty()) {
-    RCLCPP_ERROR(get_logger(), "Default route is empty. Nothing to load.");
+    RCLCPP_INFO(
+      get_logger(),
+      "Pillar mission mode active. Waiting for /detected_pillars before loading targets.");
     return;
   }
 
@@ -895,6 +1191,8 @@ RouteTestNode::RouteTestNode(
 
 std::vector<Target> RouteTestNode::buildRoute() const
 {
+  return {};
+
   // 航点 type: 1=普通  2=抓取  3=投放
   return std::vector<Target>{
     Target{0.0,   0.0,   110.0, 0.0, 1},   // 起飞 / 巡航高度

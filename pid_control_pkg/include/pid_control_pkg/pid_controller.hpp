@@ -7,9 +7,11 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int16.hpp>
 #include <std_msgs/msg/int32_multi_array.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/buffer.h>
@@ -64,7 +66,9 @@ public:
 
 private:
   void targetPositionCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
-  void heightCallback(const std_msgs::msg::Int16::SharedPtr msg);
+  void groundHeightCallback(const std_msgs::msg::Int16::SharedPtr msg);
+  void pillarHeightCallback(const std_msgs::msg::Float32::SharedPtr msg);
+  void heightReferenceModeCallback(const std_msgs::msg::UInt8::SharedPtr msg);
   void visualTakeoverCallback(const std_msgs::msg::Bool::SharedPtr msg);
   void fineDataCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg);
   void controlTimerCallback();
@@ -80,7 +84,9 @@ private:
   inline double radToDeg(double rad) const { return rad * 180.0 / M_PI; }
 
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr target_position_sub_;
-  rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr height_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr ground_height_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr pillar_height_sub_;
+  rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr height_reference_mode_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr visual_takeover_sub_;
   rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr fine_data_sub_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr target_velocity_pub_;
@@ -101,6 +107,11 @@ private:
   double target_yaw_deg_;
   bool has_target_position_;
   bool has_target_height_;
+  bool has_ground_height_;
+  bool has_pillar_height_;
+  uint8_t height_reference_mode_;
+  double ground_z_cm_;
+  double pillar_z_cm_;
 
   double current_x_cm_;
   double current_y_cm_;

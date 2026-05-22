@@ -10,6 +10,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int16.hpp>
 #include <std_msgs/msg/int32.hpp>
@@ -42,7 +43,8 @@ enum class TaskPhase
   PickupObserving,   // 抓取：观察 1s，看 /fine_data 是否还有黑圆来判定成败
   DropArriving,      // 投放：飞到 (x,y,40cm)
   DropAligning,      // 投放：在 40cm 使用 AprilTag 视觉对准
-  DropActing         // 投放：servo=01 已发，2s 内发 magnet=00 释放，结束发 servo=00
+  DropActing,        // 投放：servo=01 已发，2s 内发 magnet=00 释放，结束发 servo=00
+  PillarInspecting   // 柱子巡检：切到柱面高度，在视觉高度观察是否有黑圆
 };
 
 class RouteTargetPublisherNode : public rclcpp::Node
@@ -58,17 +60,25 @@ private:
   void publishCurrent();
   void publishTarget(const Target & target, bool init_flag);
   Target getPublishedTarget(const Target & target) const;
+  void clearTargets();
 
   bool getCurrentPose(double & x_cm, double & y_cm, double & z_cm, double & yaw_deg);
   bool isReached(const Target & target, double x_cm, double y_cm, double z_cm, double yaw_deg) const;
   bool hasFreshFineData(const rclcpp::Time & now_time) const;
 
   void monitorTimerCallback();
-  void heightCallback(const std_msgs::msg::Int16::SharedPtr msg);
+  void groundHeightCallback(const std_msgs::msg::Int16::SharedPtr msg);
+  void pillarHeightCallback(const std_msgs::msg::Float32::SharedPtr msg);
+  void detectedPillarsCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
   void fineDataCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg);
   void advanceToNextTarget();
+  void appendNextInspectionTarget();
+  void schedulePickupTargetIfReady();
+  void scheduleDropTargetIfReady();
+  void scheduleReturnHomeTargets();
   void publishVisualTakeoverState(bool active);
   void publishVisionTargetMode(uint8_t mode);
+  void publishHeightReferenceMode(uint8_t mode);
   void publishServoControl(uint8_t state);
   void publishElectromagnetControl(uint8_t state);
   void setPhase(TaskPhase phase, const rclcpp::Time & now_time);
@@ -81,6 +91,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr active_controller_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr visual_takeover_active_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr vision_target_mode_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr height_reference_mode_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr servo_control_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr electromagnet_control_pub_;
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr mission_complete_pub_;
@@ -88,7 +99,9 @@ private:
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr pickup_failed_pub_;
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr drop_done_pub_;
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr drop_failed_pub_;
-  rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr height_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr ground_height_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr pillar_height_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr detected_pillars_sub_;
   rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr fine_data_sub_;
   rclcpp::TimerBase::SharedPtr monitor_timer_;
 
@@ -100,7 +113,12 @@ private:
   std::size_t current_idx_;
 
   bool has_height_;
+  bool has_ground_height_;
+  bool has_pillar_height_;
+  uint8_t height_reference_mode_;
   double current_height_cm_;
+  double ground_height_cm_;
+  double pillar_height_cm_;
 
   double pos_tol_cm_;
   double yaw_tol_deg_;
@@ -126,6 +144,8 @@ private:
   double pickup_observe_sec_;              // 兼容旧参数；当前判断窗口由 pickup_check_observe_sec 控制
   int pickup_max_attempts_;                // 抓取最大重试次数（默认 3）
   double circle_lost_window_sec_;          // /fine_data 多久没新消息算"黑圆消失"（默认 1.0s）
+  double pillar_inspect_altitude_cm_;      // 柱子巡检视觉高度
+  double pillar_inspect_observe_sec_;      // 到达巡检高度后的观察窗口
 
   // 投放参数（独立时序，不受抓取参数影响）
   double drop_altitude_cm_;                // 兼容旧参数；当前投放高度由 drop_align_altitude_cm 控制
@@ -137,9 +157,12 @@ private:
   bool visual_takeover_active_;
   bool has_fine_data_;
   bool pickup_observed_fine_data_;
+  bool pillar_inspect_observing_;
+  bool pillar_inspect_seen_circle_;
   int fine_error_x_px_;
   int fine_error_y_px_;
   rclcpp::Time last_fine_data_time_;
+  rclcpp::Time pillar_inspect_observe_start_time_;
 
   bool mission_complete_sent_;
 
@@ -158,6 +181,23 @@ private:
   double aligned_x_cm_;
   double aligned_y_cm_;
   bool has_aligned_position_;
+
+  struct PillarTarget
+  {
+    double x_cm;
+    double y_cm;
+    bool inspected = false;
+    bool has_circle = false;
+  };
+
+  std::vector<PillarTarget> pillar_targets_;
+  bool pillar_mission_built_;
+  std::size_t next_pillar_inspect_idx_;
+  int empty_pillar_idx_;
+  int pickup_pillar_idx_;
+  bool pickup_target_added_;
+  bool drop_target_added_;
+  bool return_home_added_;
 };
 
 class RouteTestNode : public rclcpp::Node

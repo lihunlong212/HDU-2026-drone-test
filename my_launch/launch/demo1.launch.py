@@ -18,6 +18,16 @@ def generate_launch_description() -> LaunchDescription:
     uart_to_stm32_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(_package_launch("uart_to_stm32", "uart_to_stm32.launch.py"))
     )
+    laser_array_ground_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            _package_launch("laser_array_pkg", "laser_array_ground.launch.py")
+        )
+    )
+    pillar_detector_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            _package_launch("pillar_detector_pkg", "pillar_detector.launch.py")
+        )
+    )
     position_pid_controller_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             _package_launch("pid_control_pkg", "position_pid_controller.launch.py")
@@ -36,8 +46,10 @@ def generate_launch_description() -> LaunchDescription:
         [
             fly_carto_launch,
             TimerAction(period=2.0, actions=[uart_to_stm32_launch]),
-            TimerAction(period=4.0, actions=[camera_launch]),
-            TimerAction(period=6.0, actions=[position_pid_controller_launch]),
-            TimerAction(period=8.0, actions=[route_test_launch]),
+            TimerAction(period=3.0, actions=[laser_array_ground_launch]),
+            TimerAction(period=4.0, actions=[pillar_detector_launch]),
+            TimerAction(period=5.0, actions=[camera_launch]),
+            TimerAction(period=7.0, actions=[position_pid_controller_launch]),
+            TimerAction(period=9.0, actions=[route_test_launch]),
         ]
     )

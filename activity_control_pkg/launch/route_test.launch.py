@@ -43,6 +43,8 @@ def generate_launch_description():
                     "pickup_check_observe_sec": 2.0,
                     "pickup_max_attempts": 3,
                     "circle_lost_window_sec": 1.0,
+                    "pillar_inspect_altitude_cm": 25.0,
+                    "pillar_inspect_observe_sec": 2.0,
                     # 投放航点（type=3）参数
                     "drop_altitude_cm": 35.0,
                     "drop_align_altitude_cm": 20.0,
