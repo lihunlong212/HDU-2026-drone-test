@@ -23,50 +23,10 @@
 namespace activity_control_pkg
 {
 
-// ───────── 物理标定常量（编译期宏，改后需重新编译）─────────
-// 标定办法：飞机静止贴地，分别读两个激光的输出，把读数填进下面。
-// 注意：这三个是宏、不是 ROS 参数，只能改这里再 colcon build。
-
-// 面阵激光贴地读数（cm）。也用于下降目标高度换算：z = 柱高 + 此值 + 余隙。
-#ifndef LASER_AREA_BASE_CM
-#define LASER_AREA_BASE_CM   13.0   // TODO: 实测填入
-#endif
-// 点阵激光贴地读数（cm）。
-#ifndef LASER_POINT_BASE_CM
-#define LASER_POINT_BASE_CM   4.0   // TODO: 实测填入
-#endif
-// 两激光的 z 向安装高度差（cm）= 面阵 - 点阵（面阵装得高）。
-// 柱高反推用的修正量：柱高 = (面阵地面 - 此差值) - 点阵读数。
-// 默认由上面两个贴地读数相减得到；若你直接量了差值，在此覆盖即可。
-#ifndef LASER_MOUNT_DIFF_CM
-#define LASER_MOUNT_DIFF_CM  (LASER_AREA_BASE_CM - LASER_POINT_BASE_CM)
-#endif
-
-// ★ R：机械臂伸直且臂尖触地时的【面阵激光读数】(cm)。第二趟下降的唯一高度参照。
-// 要让臂尖落到柱顶(z=柱高)，面阵目标读数 = R + 柱高。
-// 标定法：飞机悬停到"机械臂伸直、臂尖刚触地"，读 /laser_array/ground_height 即为 R。
-// （此刻点阵被伸出的机械臂挡住=垃圾值，正好印证第二趟不能用点阵。）
-// 一个数直接量出臂长，取代旧式 LASER_AREA_BASE_CM + grab_clearance 的拼凑。
-#ifndef ARM_GROUND_AREA_CM
-#define ARM_GROUND_AREA_CM  27.0   // 实测标定 2026-05-22（臂尖触地稳定段面阵中位数27/均值27.23/σ0.49，220445.csv）
-#endif
-
-// 摄像头相对点阵激光的 xy 物理偏置（cm，机体系）——待测。
-// 视觉把柱子对到相机中心后，机体再按此偏置平移，让点阵/机械臂正对柱子。
-// 提示：运行期实际用的是 launch 里的 cam_offset_dx_cm / cam_offset_dy_cm 参数，
-//       下面这俩宏只是参数缺省值的兜底。要改优先改 launch（不用重编）。
-#ifndef CAM_TO_POINT_LASER_DX_CM
-#define CAM_TO_POINT_LASER_DX_CM  0.0   // TODO: 实测填入
-#endif
-#ifndef CAM_TO_POINT_LASER_DY_CM
-#define CAM_TO_POINT_LASER_DY_CM  0.0   // TODO: 实测填入
-#endif
-
 // 摄像头相对机械臂吸取点的 xy 物理偏置（cm，机体系）。
 // 2026-05-22：机械结构已改——舵机机械臂伸直后吸取点正好落在摄像头光轴竖直线上，
 // 故吸取点 xy = 相机中心 xy，此偏置物理真值就是 0/0（不再是待标定占位）。
 // 含义：第二趟铁片对到画面中心即可竖直下降取物，DESCEND 不需平移。
-// 与 cam_offset(相机→点阵激光) 仍是两个偏置：cam_offset 测高那步把激光移到柱心。
 // 若实飞发现伸臂后吸取点与相机有微小残差，可在 launch 里给 arm_offset 填小量微调。
 #ifndef CAM_TO_ARM_DX_CM
 #define CAM_TO_ARM_DX_CM  0.0   // 机械共轴 → 0
@@ -90,8 +50,6 @@ struct PillarSurvey
 {
   double x_cm = 0.0;
   double y_cm = 0.0;
-  double height_cm = 0.0;      // 点阵反推的柱顶高度
-  bool   has_height = false;
   double plate_ratio = 0.0;    // 圆/方框面积占比（越大铁片越大；与飞行高度无关）
   bool   has_plate = false;    // 该柱顶是否检出铁片
 };
@@ -100,7 +58,7 @@ enum class MissionPhase
 {
   SCAN,          // 起飞 → 扫描终点，沿途累积柱子检测
   WAIT_PILLARS,  // 等 /detected_pillars 聚类结果
-  SURVEY,        // 第一趟：逐柱测高 + 读铁片占比（不下降不抓取）
+  SURVEY,        // 第一趟：逐柱读铁片占比（不下降不抓取）
   PICKUP,        // 第二趟：按占比大→小抓取，叠到空柱
   LAND,          // 降落到对角起停区
   DONE
@@ -110,8 +68,7 @@ enum class MissionPhase
 enum class SurveySub
 {
   APPROACH,        // 飞到柱子上方巡航高度
-  CENTER,          // 视觉对准铁片/边框中心 + 采集铁片占比 + 找到铁片声光滞空
-  MEASURE_HEIGHT   // +cam_offset 把点阵移到柱心测柱高并存储（机械臂收起、点阵无遮挡；第二趟复用）
+  CENTER           // 视觉对准铁片/边框中心 + 采集铁片占比 + 找到铁片声光滞空
 };
 
 // 第二趟每片铁片的子状态
@@ -122,11 +79,10 @@ enum class PickupSub
   DESCEND_MID,      // 视觉接管 + 用柱顶距离下降到抓取预对准高度
   RECENTER_MID,     // 在柱顶上方预对准高度精确对准（连续命中后进入最终下降）
   DESCEND_FINAL,    // 视觉接管 + 用柱顶距离下降到抓取高度
-  HOVER_GRAB,       // 抓取状态保持，悬停
   CLIMB_BACK,       // 爬回巡航高度
   OBSERVE_GRAB,     // 观察 /circle_area_ratio 判抓取成败 / 重试
   GOTO_DROP,        // 飞到空柱上方
-  CENTER_DROP,      // 视觉对准空柱边框中心（接管，仅 xy 精对；空柱高第一趟已测）
+  CENTER_DROP,      // 视觉对准空柱边框中心（接管，仅 xy 精对）
   HOVER_DROP,       // 机械臂伸出 + 松磁，悬停
   CLIMB_AFTER_DROP  // 爬回巡航高度
 };
@@ -149,7 +105,6 @@ public:
 private:
   // ── 回调 ──
   void areaHeightCallback(const std_msgs::msg::Int16::SharedPtr msg);
-  void pointHeightCallback(const std_msgs::msg::Int16::SharedPtr msg);
   void pillarTopDistanceCallback(const std_msgs::msg::Float32::SharedPtr msg);
   void pillarsCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
   void fineDataCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg);
@@ -197,11 +152,8 @@ private:
   bool dropVisionCircleVeto() const;
   void updateDropAnchorFromVision(double x_cm, double y_cm, const char * reason);
 
-  // 现场测柱高：命中帧(drop≥阈值)分簇，取“最高的≥min_cluster_frames 簇”的中位数为柱顶（柱顶给最大drop）
-  bool tryStepHeight(double & out_cm);
   bool finalizePlateRatio(double & out_ratio) const;
 
-  void applyCameraOffsetToTarget(double & x_cm, double & y_cm, double yaw_deg) const;
   void applyArmOffsetToTarget(double & x_cm, double & y_cm, double yaw_deg) const;
 
   static double meterToCm(double v) { return v * 100.0; }
@@ -237,21 +189,8 @@ private:
   int    visual_align_required_hits_;
   int    visual_jump_px_;
   double visual_stale_sec_;
-  double cam_offset_dx_cm_;   // 相机→点阵激光（测高用）
-  double cam_offset_dy_cm_;
   double arm_offset_dx_cm_;   // 相机→机械臂吸取点（下降取物/放置用）
   double arm_offset_dy_cm_;
-
-  // 高度采样：sample_pillar_drop_thresh_cm_ 复用为“点阵突变”阈值
-  double sample_duration_sec_;
-  int    sample_min_pillar_frames_;
-  double sample_pillar_drop_thresh_cm_;
-
-  // 第二趟现场测柱高（命中帧分簇，取“最高的密集簇”=真柱顶，不被柱沿低值拉偏）
-  double measure_height_timeout_sec_;     // 测高超时 → 放弃该片，不下降
-  int    height_min_hit_frames_;          // 累计多少帧点阵打中柱顶(drop≥阈值)才开始分簇出结果
-  double height_cluster_gap_cm_;          // 分簇间隔：排序后相邻 drop 间隔 > 此值即切簇（默认8）
-  int    height_min_cluster_frames_;      // 一个簇至少多少帧才可信（滤单帧毛刺，默认3）
 
   // 铁片占比采样（判大小）
   int    plate_min_ratio_frames_;   // 合格占比样本最少帧数（少于则判为空柱）
@@ -263,20 +202,17 @@ private:
   double grab_align_height_cm_; // 抓取：先下降到距柱顶此高度并精对
   double grab_pick_height_cm_;  // 抓取：最终下降到距柱顶此高度后伸臂吸取
   double grab_height_tol_cm_;   // 抓取柱顶距离控制的 z 到位容差
-  double drop_release_clearance_cm_;   // 放置末段不贴死：z = R + 空柱高 + 已叠 + 此余隙（叠面上方释放）
+  double drop_release_clearance_cm_;   // 放置末段不贴死：距当前柱顶/叠面此高度释放
   double drop_post_release_hover_sec_; // 放置松磁后原地悬停时长（防机体惯性带偏）
   double drop_final_dy_cm_;    // 放置末段额外 y 偏置：补电磁铁吸取点物理偏置，防铁片偏左滚落（与 grab 同向，map +y=画面左）
   double drop_final_dx_cm_;    // 放置末段额外 x 偏置（map +x=画面正上方）：放置专用，正值往前补
   double arm_extend_sec_;     // 放置时机械臂伸直到位耗时
-  double hover_grab_sec_;
-  double plate_thickness_cm_;        // 每片铁片厚度，用于叠放时逐层抬高落点
   double empty_pillar_side_cm_;           // 空柱大柱边长，用于限制视觉 anchor 相对点云中心的最大可信修正
   bool   drop_visual_anchor_enable_;      // 空柱放置：视觉确认后记录/复用真实放置 anchor
   double drop_anchor_max_correction_cm_;  // 首次 anchor 相对点云空柱坐标的最大允许修正
   double drop_anchor_max_update_step_cm_; // 后续 anchor 单次更新最大步长，防止视觉/点云异常带偏
   double drop_visual_circle_veto_sec_;    // 已叠放后近期看到圆盘则不信空柱视觉更新
-  bool   traverse_only_mode_;        // true: 只做第一趟（占比）然后降落（试飞用，不测高不抓取）
-  bool   measure_only_mode_;         // true: 跑到第二趟测高即止，逐片测完高就跳过，不下降不抓（验证测高用）
+  bool   traverse_only_mode_;        // true: 只做第一趟（占比）然后降落（试飞用，不抓取）
   double target_republish_period_sec_;
 
   // 抓取观察 + 重试
@@ -309,8 +245,6 @@ private:
   std::size_t empty_idx_;
   double empty_pillar_x_cm_ = 0.0;
   double empty_pillar_y_cm_ = 0.0;
-  double empty_pillar_height_cm_ = 0.0;
-  bool   has_empty_pillar_height_ = false;
   bool   has_drop_anchor_ = false;
   double drop_anchor_x_cm_ = 0.0;
   double drop_anchor_y_cm_ = 0.0;
@@ -346,11 +280,6 @@ private:
   int  last_fine_dy_;
   bool visual_takeover_active_;
 
-  // 高度采样
-  std::vector<double> pillar_height_samples_cm_;
-  rclcpp::Time sample_start_time_;
-  std::vector<double> height_hit_samples_; // 测高：窗口内所有打中柱顶(drop≥阈值)的帧，分簇取最高密集簇
-
   // visual_pkg 的铁片面积占比
   double last_circle_ratio_ = 0.0;
   bool   has_circle_ratio_  = false;
@@ -363,8 +292,6 @@ private:
   // 激光数据
   bool   has_area_height_;
   double area_height_cm_;
-  bool   has_point_height_;
-  double point_height_cm_;
   bool   has_pillar_top_distance_;
   double pillar_top_distance_cm_;
 
@@ -390,7 +317,6 @@ private:
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr                pickup_failed_pub_;
 
   rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr             area_height_sub_;
-  rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr             point_height_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr           pillar_top_distance_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr pillars_sub_;
   rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr   fine_data_sub_;

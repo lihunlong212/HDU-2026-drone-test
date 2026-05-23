@@ -52,11 +52,9 @@ def generate_launch_description():
     drop_release_clearance_cm = LaunchConfiguration("drop_release_clearance_cm")
     drop_post_release_hover_sec = LaunchConfiguration("drop_post_release_hover_sec")
     arm_extend_sec = LaunchConfiguration("arm_extend_sec")
-    hover_grab_sec = LaunchConfiguration("hover_grab_sec")
     pickup_check_observe_sec = LaunchConfiguration("pickup_check_observe_sec")
     pickup_observe_plate_frames_required = LaunchConfiguration("pickup_observe_plate_frames_required")
     pickup_max_attempts = LaunchConfiguration("pickup_max_attempts")
-    measure_only_mode = LaunchConfiguration("measure_only_mode")
 
     # 包路径
     my_carto_pkg_share        = FindPackageShare(package='my_carto_pkg').find('my_carto_pkg')
@@ -119,11 +117,9 @@ def generate_launch_description():
             "drop_release_clearance_cm": drop_release_clearance_cm,
             "drop_post_release_hover_sec": drop_post_release_hover_sec,
             "arm_extend_sec": arm_extend_sec,
-            "hover_grab_sec": hover_grab_sec,
             "pickup_check_observe_sec": pickup_check_observe_sec,
             "pickup_observe_plate_frames_required": pickup_observe_plate_frames_required,
             "pickup_max_attempts": pickup_max_attempts,
-            "measure_only_mode": measure_only_mode,
         }.items()
     )
     pillar_detector_tf_launch = IncludeLaunchDescription(
@@ -218,13 +214,13 @@ def generate_launch_description():
             "height_tolerance_cm", default_value="8.0",
             description="普通地面高度模式到达容差(cm)，巡航/放置/降落使用"),
         DeclareLaunchArgument(
-            "visual_align1_timeout_sec", default_value="4.0",
+            "visual_align1_timeout_sec", default_value="2.0",
             description="第一次视觉对准最大等待时间(s)，柱子/降落框都使用"),
         DeclareLaunchArgument(
             "visual_align2_timeout_sec", default_value="1.5",
             description="二次复对准最大等待时间(s)，用于更近距离精对"),
         DeclareLaunchArgument(
-            "visual_pixel_tol_px", default_value="30",
+            "visual_pixel_tol_px", default_value="60",
             description="视觉认为已对准的像素容差(px)，抓取要求连续满足多帧"),
         DeclareLaunchArgument(
             "visual_align_required_hits", default_value="3",
@@ -247,13 +243,13 @@ def generate_launch_description():
             "land_recenter_drop_cm", default_value="60.0",
             description="降落第一次对准后下探多少厘米再二次对准；0 表示不二次对准"),
         DeclareLaunchArgument(
-            "grab_align_height_cm", default_value="30.0",
+            "grab_align_height_cm", default_value="38.0",
             description="到柱子航点后，切柱顶距离控制并先下降到距柱顶高度(cm)做精对"),
         DeclareLaunchArgument(
-            "grab_pick_height_cm", default_value="10.0",
+            "grab_pick_height_cm", default_value="13.0",
             description="精对连续满足后，继续下降到距柱顶高度(cm)伸臂吸取"),
         DeclareLaunchArgument(
-            "grab_height_tolerance_cm", default_value="3.0",
+            "grab_height_tolerance_cm", default_value="4.0",
             description="抓取阶段柱顶距离高度容差(cm)，用于 30cm/10cm 到位判断"),
 
         # ===== 放置 / 机械臂 / 重试参数 =====
@@ -264,7 +260,7 @@ def generate_launch_description():
             "drop_final_dx_cm", default_value="4.0",
             description="放置末段 x 偏置(cm)，map +x=画面正上方，正值往前补"),
         DeclareLaunchArgument(
-            "drop_release_clearance_cm", default_value="10.0",
+            "drop_release_clearance_cm", default_value="13.0",
             description="放置时叠面上方预留高度(cm)，太低易蹭片，太高易飘落"),
         DeclareLaunchArgument(
             "drop_post_release_hover_sec", default_value="1.0",
@@ -273,20 +269,14 @@ def generate_launch_description():
             "arm_extend_sec", default_value="1.2",
             description="放置时伸臂到位等待时间(s)，到位后才松电磁铁"),
         DeclareLaunchArgument(
-            "hover_grab_sec", default_value="1.0",
-            description="抓取到 10cm 后保持吸磁/伸臂的等待时间(s)"),
-        DeclareLaunchArgument(
-            "pickup_check_observe_sec", default_value="2.0",
+            "pickup_check_observe_sec", default_value="1.0",
             description="抓完爬升后观察铁片是否还在柱上的时间(s)"),
         DeclareLaunchArgument(
-            "pickup_observe_plate_frames_required", default_value="3",
+            "pickup_observe_plate_frames_required", default_value="2",
             description="观察期间连续看到铁片多少帧才判定抓取失败并重试"),
         DeclareLaunchArgument(
             "pickup_max_attempts", default_value="3",
             description="单个铁片最多抓取尝试次数"),
-        DeclareLaunchArgument(
-            "measure_only_mode", default_value="false",
-            description="true 时只跑第一趟测高/占比后降落，不进入抓取叠放；正式比赛保持 false"),
         fly_carto_launch,
         uart_to_stm32_launch,
         position_pid_controller_launch,
