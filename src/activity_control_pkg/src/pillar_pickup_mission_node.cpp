@@ -75,7 +75,8 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   grab_align_height_cm_         = declare_parameter("grab_align_height_cm",         30.0);
   grab_pick_height_cm_          = declare_parameter("grab_pick_height_cm",          10.0);
   grab_height_tol_cm_           = declare_parameter("grab_height_tolerance_cm",      3.0);
-  drop_release_clearance_cm_   = declare_parameter("drop_release_clearance_cm",   10.0); // 放置叠面上方释放余隙
+  drop_align_height_cm_        = declare_parameter("drop_align_height_cm",        40.0);
+  drop_release_clearance_cm_   = declare_parameter("drop_release_clearance_cm",   16.0); // 放置投递高度
   drop_post_release_hover_sec_ = declare_parameter("drop_post_release_hover_sec",  1.0); // 放置松磁后悬停
   drop_final_dy_cm_   = declare_parameter("drop_final_dy_cm",   -2.0);  // 放置末段 y 偏置（补吸取点偏置，防偏左滚落；偏左明显可加到 -6~-7）
   drop_final_dx_cm_   = declare_parameter("drop_final_dx_cm",    4.0);  // 放置末段 x 偏置（map +x=画面正上方，正值往前补）
@@ -369,7 +370,7 @@ bool PillarPickupMissionNode::isReached(const PickupWaypoint & wp, double x_cm, 
 
   const bool xy_ok  = dxy <= pos_tol_cm_;
   const bool grab_height_phase =
-    phase_ == MissionPhase::PICKUP && !descend_is_drop_ &&
+    phase_ == MissionPhase::PICKUP &&
     (pickup_sub_ == PickupSub::DESCEND_MID ||
      pickup_sub_ == PickupSub::RECENTER_MID ||
      pickup_sub_ == PickupSub::DESCEND_FINAL);
@@ -943,10 +944,10 @@ void PillarPickupMissionNode::planPickupOrder()
 
 void PillarPickupMissionNode::startDropDescend()
 {
-  // 放置：CENTER_DROP 已对准空柱中心并固化 anchor。这里切柱顶/叠面距离控制，
-  // 直接下降到 drop_release_clearance，不再测柱高、不再分段追目标。
+  // 放置：全程视觉接管。先切柱顶/叠面距离下降到 drop_align_height_cm 精对，
+  // 对准连续满足后再下降到 drop_release_clearance 投递。
   descend_is_drop_ = true;
-  enterPickupSub(PickupSub::DESCEND_FINAL);
+  enterPickupSub(PickupSub::DESCEND_MID);
 }
 
 void PillarPickupMissionNode::enterPickupSub(PickupSub s)
@@ -980,17 +981,31 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
       publishHeightControlMode(true);
       publishVisualTakeover(true);
       double tx = px, ty = py;
+      if (descend_is_drop_) {
+        getDropTargetXY(tx, ty);
+      }
       applyArmOffsetToTarget(tx, ty, 0.0);
-      sub_target_ = PickupWaypoint{tx, ty, grab_align_height_cm_, 0.0, 0.0, "descend_to_30cm"};
+      sub_target_ = PickupWaypoint{
+        tx, ty,
+        descend_is_drop_ ? drop_align_height_cm_ : grab_align_height_cm_,
+        0.0, 0.0,
+        descend_is_drop_ ? "drop_descend_to_40cm" : "descend_to_30cm"};
       republish_enabled_ = true;
       publishTarget(sub_target_);
       break;
     }
     case PickupSub::RECENTER_MID: {
       publishHeightControlMode(true);
-      // 在距柱顶 30cm 处精确对准，z 保持当前柱顶距离目标
+      // 在距柱顶/叠面预对准高度处精确对准，z 保持当前柱顶距离目标
       double tx = px, ty = py;
-      sub_target_ = PickupWaypoint{tx, ty, grab_align_height_cm_, 0.0, 0.0, "recenter_at_30cm"};
+      if (descend_is_drop_) {
+        getDropTargetXY(tx, ty);
+      }
+      sub_target_ = PickupWaypoint{
+        tx, ty,
+        descend_is_drop_ ? drop_align_height_cm_ : grab_align_height_cm_,
+        0.0, 0.0,
+        descend_is_drop_ ? "drop_recenter_at_40cm" : "recenter_at_30cm"};
       publishTarget(sub_target_);
       republish_enabled_ = false;
       publishVisualTakeover(true);
@@ -1012,7 +1027,7 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
       double tx = px, ty = py;
       if (descend_is_drop_) {
         publishHeightControlMode(true);
-        publishVisualTakeover(false);
+        publishVisualTakeover(true);
         getDropTargetXY(tx, ty);
       }
       applyArmOffsetToTarget(tx, ty, 0.0);
@@ -1116,12 +1131,15 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
       break;
     case PickupSub::DESCEND_MID:
       if (isReached(sub_target_, x_cm, y_cm, z_cm, 0.0)) {
-        enterPickupSub(PickupSub::RECENTER_MID);   // 到 30cm 先精确对准
+        enterPickupSub(PickupSub::RECENTER_MID);   // 到预对准高度先精确对准
       }
       break;
     case PickupSub::RECENTER_MID: {
-      // 30cm 高度处要求视觉误差连续 visual_align_required_hits 帧小于容错，再下降到 10cm。
+      // 预对准高度处要求视觉误差连续 visual_align_required_hits 帧小于容错，再进入最终下降。
       if (isVisuallyAligned()) {
+        if (descend_is_drop_) {
+          updateDropAnchorFromVision(x_cm, y_cm, "drop_align_40cm");
+        }
         enterPickupSub(PickupSub::DESCEND_FINAL);
       }
       break;
@@ -1191,21 +1209,7 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
       }
       break;
     case PickupSub::CENTER_DROP: {
-      // 仅做 xy 精对；视觉可信时把当前实际位置固化为放置 anchor。
-      const bool aligned = isVisuallyAligned();
-      const bool timeout = (now() - sub_enter_time_).seconds() > visual_align1_timeout_sec_;
-      if (aligned || timeout) {
-        if (aligned) {
-          updateDropAnchorFromVision(x_cm, y_cm, "center_drop");
-        } else {
-          RCLCPP_WARN(get_logger(),
-            "[drop anchor] center_drop 视觉超时，使用%s (%.1f,%.1f)",
-            has_drop_anchor_ ? "已有 anchor" : "点云空柱坐标",
-            has_drop_anchor_ ? drop_anchor_x_cm_ : empty_pillar_x_cm_,
-            has_drop_anchor_ ? drop_anchor_y_cm_ : empty_pillar_y_cm_);
-        }
-        startDropDescend();
-      }
+      startDropDescend();
       break;
     }
     case PickupSub::HOVER_DROP: {

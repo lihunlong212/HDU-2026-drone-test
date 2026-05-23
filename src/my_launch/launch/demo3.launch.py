@@ -49,6 +49,7 @@ def generate_launch_description():
     grab_height_tolerance_cm = LaunchConfiguration("grab_height_tolerance_cm")
     drop_final_dy_cm = LaunchConfiguration("drop_final_dy_cm")
     drop_final_dx_cm = LaunchConfiguration("drop_final_dx_cm")
+    drop_align_height_cm = LaunchConfiguration("drop_align_height_cm")
     drop_release_clearance_cm = LaunchConfiguration("drop_release_clearance_cm")
     drop_post_release_hover_sec = LaunchConfiguration("drop_post_release_hover_sec")
     arm_extend_sec = LaunchConfiguration("arm_extend_sec")
@@ -114,6 +115,7 @@ def generate_launch_description():
             "grab_height_tolerance_cm": grab_height_tolerance_cm,
             "drop_final_dy_cm": drop_final_dy_cm,
             "drop_final_dx_cm": drop_final_dx_cm,
+            "drop_align_height_cm": drop_align_height_cm,
             "drop_release_clearance_cm": drop_release_clearance_cm,
             "drop_post_release_hover_sec": drop_post_release_hover_sec,
             "arm_extend_sec": arm_extend_sec,
@@ -260,8 +262,11 @@ def generate_launch_description():
             "drop_final_dx_cm", default_value="4.0",
             description="放置末段 x 偏置(cm)，map +x=画面正上方，正值往前补"),
         DeclareLaunchArgument(
-            "drop_release_clearance_cm", default_value="13.0",
-            description="放置时叠面上方预留高度(cm)，太低易蹭片，太高易飘落"),
+            "drop_align_height_cm", default_value="40.0",
+            description="放置时先下降到距柱顶/叠面高度(cm)做精确视觉对准"),
+        DeclareLaunchArgument(
+            "drop_release_clearance_cm", default_value="16.0",
+            description="放置投递高度(cm)，精对后保持视觉接管下降到此高度再投递"),
         DeclareLaunchArgument(
             "drop_post_release_hover_sec", default_value="1.0",
             description="松磁后原地悬停时间(s)，等铁片稳定后再收臂"),

@@ -72,8 +72,11 @@ def generate_launch_description():
             "drop_final_dx_cm", default_value="4.0",
             description="放置末段 x 偏置(cm)，map +x=画面正上方，正值往前补"),
         DeclareLaunchArgument(
-            "drop_release_clearance_cm", default_value="13.0",
-            description="放置时叠面上方预留高度(cm)，太低易蹭片，太高易飘落"),
+            "drop_align_height_cm", default_value="40.0",
+            description="放置时先下降到距柱顶/叠面高度(cm)做精确视觉对准"),
+        DeclareLaunchArgument(
+            "drop_release_clearance_cm", default_value="16.0",
+            description="放置投递高度(cm)，精对后保持视觉接管下降到此高度再投递"),
         DeclareLaunchArgument(
             "drop_post_release_hover_sec", default_value="1.0",
             description="松磁后原地悬停时间(s)，等铁片稳定后再收臂"),
@@ -154,7 +157,8 @@ def generate_launch_description():
                 "grab_align_height_cm": p("grab_align_height_cm"),
                 "grab_pick_height_cm": p("grab_pick_height_cm"),
                 "grab_height_tolerance_cm": p("grab_height_tolerance_cm"),
-                # 放置末段不贴死：目标=距当前柱顶/叠面 drop_release_clearance(cm)。对准一次中心→直接降到此高度→
+                "drop_align_height_cm": p("drop_align_height_cm"),
+                # 放置：先在 drop_align_height_cm 精对，再全程视觉接管下降到 drop_release_clearance_cm 投递。
                 # 伸臂→松磁→悬停 drop_post_release_hover_sec→收臂。避免贴近接触摩擦/下压/惯性把片带歪。
                 "drop_release_clearance_cm": p("drop_release_clearance_cm"),
                 "drop_post_release_hover_sec": p("drop_post_release_hover_sec"),

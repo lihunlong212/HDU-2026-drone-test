@@ -202,6 +202,7 @@ private:
   double grab_align_height_cm_; // 抓取：先下降到距柱顶此高度并精对
   double grab_pick_height_cm_;  // 抓取：最终下降到距柱顶此高度后伸臂吸取
   double grab_height_tol_cm_;   // 抓取柱顶距离控制的 z 到位容差
+  double drop_align_height_cm_; // 放置：先下降到距柱顶/叠面此高度并精对
   double drop_release_clearance_cm_;   // 放置末段不贴死：距当前柱顶/叠面此高度释放
   double drop_post_release_hover_sec_; // 放置松磁后原地悬停时长（防机体惯性带偏）
   double drop_final_dy_cm_;    // 放置末段额外 y 偏置：补电磁铁吸取点物理偏置，防铁片偏左滚落（与 grab 同向，map +y=画面左）
