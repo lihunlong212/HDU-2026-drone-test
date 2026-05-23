@@ -1107,7 +1107,6 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
     case PickupSub::DESCEND_MID: {
       publishHeightControlMode(true);
       publishVisualTakeover(true);
-      publishMagnet(true);   // 抓取下降一开始即通电，全程保持磁吸（早充磁）
       double tx = px, ty = py;
       applyArmOffsetToTarget(tx, ty, 0.0);
       sub_target_ = PickupWaypoint{tx, ty, grab_align_height_cm_, 0.0, 0.0, "descend_to_30cm"};
@@ -1129,7 +1128,10 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
       if (!descend_is_drop_) {
         publishHeightControlMode(true);
         publishVisualTakeover(true);
-        publishMagnet(true);   // 确保磁吸保持（无中停的短下降直接进此段时也已通电）
+        // 30cm 精对通过后，最终下降到 10cm 的途中就提前吸磁并伸臂。
+        // 这样接近铁片时机械臂/电磁铁已经处于抓取状态，不等 10cm 到位后才动作。
+        publishMagnet(true);
+        publishServo(true);
       }
       // 放置末段仍用地面高度参照；抓取末段直接用距柱顶距离。
       const double z_final = descend_is_drop_
@@ -1158,10 +1160,9 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
       publishHeightControlMode(true);
       publishVisualTakeover(true);
       RCLCPP_INFO(get_logger(),
-        "[铁片 %zu/%zu] HOVER_GRAB: 机械臂伸出 + 吸磁，悬停 %.1fs",
+        "[铁片 %zu/%zu] HOVER_GRAB: 抓取状态保持，悬停 %.1fs",
         pickup_iter_ + 1, pickup_order_.size(), hover_grab_sec_);
-      // ── 抓取动作（待替换为飞控下降协议）──
-      // 顺序：先确认电磁铁通电（下降时已开），再伸臂，确保接触瞬间已有磁吸
+      // DESCEND_FINAL 已提前开磁铁并伸臂；这里仅兜底重发一次保持状态。
       publishMagnet(true);
       publishServo(true);
       break;

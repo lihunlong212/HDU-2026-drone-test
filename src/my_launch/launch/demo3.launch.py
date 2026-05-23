@@ -215,7 +215,7 @@ def generate_launch_description():
             "position_tolerance_cm", default_value="9.0",
             description="地图航点到达 XY 容差(cm)，越小越准但更容易卡住"),
         DeclareLaunchArgument(
-            "height_tolerance_cm", default_value="12.0",
+            "height_tolerance_cm", default_value="8.0",
             description="普通地面高度模式到达容差(cm)，巡航/放置/降落使用"),
         DeclareLaunchArgument(
             "visual_align1_timeout_sec", default_value="4.0",
@@ -224,7 +224,7 @@ def generate_launch_description():
             "visual_align2_timeout_sec", default_value="1.5",
             description="二次复对准最大等待时间(s)，用于更近距离精对"),
         DeclareLaunchArgument(
-            "visual_pixel_tol_px", default_value="15",
+            "visual_pixel_tol_px", default_value="30",
             description="视觉认为已对准的像素容差(px)，抓取要求连续满足多帧"),
         DeclareLaunchArgument(
             "visual_align_required_hits", default_value="3",
@@ -238,10 +238,10 @@ def generate_launch_description():
 
         # ===== 高度 / 抓取参数 =====
         DeclareLaunchArgument(
-            "pillar_visit_height_cm", default_value="150.0",
+            "pillar_visit_height_cm", default_value="140.0",
             description="第二趟到柱子上方的巡航高度(cm)，使用地面高度控制"),
         DeclareLaunchArgument(
-            "land_align_height_cm", default_value="150.0",
+            "land_align_height_cm", default_value="140.0",
             description="降落前视觉对准起停区 B 的高度(cm)，要能看全黑框"),
         DeclareLaunchArgument(
             "land_recenter_drop_cm", default_value="60.0",

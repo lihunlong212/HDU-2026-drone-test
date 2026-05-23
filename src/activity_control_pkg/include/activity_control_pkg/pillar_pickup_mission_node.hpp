@@ -122,7 +122,7 @@ enum class PickupSub
   DESCEND_MID,      // 视觉接管 + 用柱顶距离下降到抓取预对准高度
   RECENTER_MID,     // 在柱顶上方预对准高度精确对准（连续命中后进入最终下降）
   DESCEND_FINAL,    // 视觉接管 + 用柱顶距离下降到抓取高度
-  HOVER_GRAB,       // 机械臂伸出 + 吸磁，悬停
+  HOVER_GRAB,       // 抓取状态保持，悬停
   CLIMB_BACK,       // 爬回巡航高度
   OBSERVE_GRAB,     // 观察 /circle_area_ratio 判抓取成败 / 重试
   GOTO_DROP,        // 飞到空柱上方

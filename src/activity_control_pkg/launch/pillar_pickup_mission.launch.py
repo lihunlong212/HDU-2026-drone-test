@@ -55,10 +55,10 @@ def generate_launch_description():
 
         # ===== 常调：抓取高度 =====
         DeclareLaunchArgument(
-            "grab_align_height_cm", default_value="30.0",
+            "grab_align_height_cm", default_value="38.0",
             description="到柱子航点后，切柱顶距离控制并先下降到距柱顶高度(cm)做精对"),
         DeclareLaunchArgument(
-            "grab_pick_height_cm", default_value="10.0",
+            "grab_pick_height_cm", default_value="13.0",
             description="精对连续满足后，继续下降到距柱顶高度(cm)伸臂吸取"),
         DeclareLaunchArgument(
             "grab_height_tolerance_cm", default_value="3.0",
@@ -125,7 +125,7 @@ def generate_launch_description():
 
                 # 精准降落：飞到对角起停区 B 上方先用视觉对准 B 黑色方框中心，再竖直降落。
                 # land_visual_enable=False 则回退纯位置降落（旧行为）。
-                # land_align_height_cm 是对准 B 框时的悬停高度（要能看全 ~50cm 框；默认=巡航 150，
+                # land_align_height_cm 是对准 B 框时的悬停高度（要能看全 ~50cm 框；默认=巡航高度，
                 # 此高度 50cm 框居中、对角的 A 框在视野外，rect_center_bias 会优先锁正下方的 B）。
                 "land_visual_enable": True,
                 "land_align_height_cm": p("land_align_height_cm"),
@@ -138,7 +138,7 @@ def generate_launch_description():
                 "visual_align2_timeout_sec": p("visual_align2_timeout_sec"),
                 "visual_pixel_tol_px": p("visual_pixel_tol_px", int),
                 "visual_align_required_hits": p("visual_align_required_hits", int),
-                "visual_jump_px": p("visual_jump_px"),
+                "visual_jump_px": p("visual_jump_px", int),
                 "visual_stale_sec": p("visual_stale_sec"),
 
                 # 摄像头→点阵激光 xy 偏置（cm，机体系=map系，yaw全程0）。仅用于“测高”那步：
