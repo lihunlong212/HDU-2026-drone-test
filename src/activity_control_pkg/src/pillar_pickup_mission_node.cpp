@@ -37,6 +37,8 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   area_height_cm_(0.0),
   has_point_height_(false),
   point_height_cm_(0.0),
+  has_pillar_top_distance_(false),
+  pillar_top_distance_cm_(0.0),
   mission_complete_sent_(false)
 {
   map_frame_        = declare_parameter<std::string>("map_frame",        "map");
@@ -64,7 +66,7 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   visual_pixel_tol_           = declare_parameter("visual_pixel_tol_px",      15);
   visual_align_required_hits_ = declare_parameter("visual_align_required_hits", 3);
   visual_jump_px_             = declare_parameter("visual_jump_px",          100);
-  visual_stale_sec_           = declare_parameter("visual_stale_sec",        0.5);
+  visual_stale_sec_           = declare_parameter("visual_stale_sec",        0.4);
   cam_offset_dx_cm_ = declare_parameter("cam_offset_dx_cm", CAM_TO_POINT_LASER_DX_CM);
   cam_offset_dy_cm_ = declare_parameter("cam_offset_dy_cm", CAM_TO_POINT_LASER_DY_CM);
   arm_offset_dx_cm_ = declare_parameter("arm_offset_dx_cm", CAM_TO_ARM_DX_CM);
@@ -78,32 +80,21 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   height_min_hit_frames_       = declare_parameter("height_min_hit_frames",      10);
   height_cluster_gap_cm_       = declare_parameter("height_cluster_gap_cm",       8.0);
   height_min_cluster_frames_   = declare_parameter("height_min_cluster_frames",   3);
-  live_height_consistency_cm_  = declare_parameter("live_height_consistency_cm", 15.0);
 
   plate_min_ratio_frames_ = declare_parameter("plate_min_ratio_frames", 3);
 
   survey_signal_hold_sec_ = declare_parameter("survey_signal_hold_sec", 3.0);
 
-  mid_clearance_cm_   = declare_parameter("mid_clearance_cm",   30.0);  // 已废弃(抓取改分段下降)
-  descend_seg_len_cm_           = declare_parameter("descend_seg_len_cm",           30.0);
-  descend_min_tail_cm_          = declare_parameter("descend_min_tail_cm",          20.0);
-  descend_recenter_timeout_sec_ = declare_parameter("descend_recenter_timeout_sec", 2.5);
-  descend_abort_area_cm_        = declare_parameter("descend_abort_area_cm",        22.0);
-  descend_seg_len_min_plate_cm_ = declare_parameter("descend_seg_len_min_plate_cm", 20.0);
-  grab_press_cm_      = declare_parameter("grab_press_cm",       2.5);  // 抓取下压量(2~3cm)
-  drop_gap_cm_        = declare_parameter("drop_gap_cm",         2.0);  // 已弃用(放置改上方释放)
-  drop_press_cm_      = declare_parameter("drop_press_cm",       2.0);  // 已弃用(放置改上方释放)
+  grab_align_height_cm_         = declare_parameter("grab_align_height_cm",         30.0);
+  grab_pick_height_cm_          = declare_parameter("grab_pick_height_cm",          10.0);
+  grab_height_tol_cm_           = declare_parameter("grab_height_tolerance_cm",      3.0);
   drop_release_clearance_cm_   = declare_parameter("drop_release_clearance_cm",   10.0); // 放置叠面上方释放余隙
   drop_post_release_hover_sec_ = declare_parameter("drop_post_release_hover_sec",  1.0); // 放置松磁后悬停
-  grab_final_dy_cm_   = declare_parameter("grab_final_dy_cm",   -2.0);  // 抓取末段 y 偏置
   drop_final_dy_cm_   = declare_parameter("drop_final_dy_cm",   -2.0);  // 放置末段 y 偏置（补吸取点偏置，防偏左滚落；偏左明显可加到 -6~-7）
   drop_final_dx_cm_   = declare_parameter("drop_final_dx_cm",    4.0);  // 放置末段 x 偏置（map +x=画面正上方，正值往前补）
-  grab_descend_mode_  = declare_parameter("grab_descend_mode", std::string("segmented")); // segmented / direct_after_center / direct_no_remeasure
   arm_extend_sec_     = declare_parameter("arm_extend_sec",      1.2);  // 放置伸臂到位耗时
-  drop_settle_sec_    = declare_parameter("drop_settle_sec",     0.5);  // 已弃用(放置改用 drop_post_release_hover_sec)
   hover_grab_sec_     = declare_parameter("hover_grab_sec",      2.0);
   plate_thickness_cm_ = declare_parameter("plate_thickness_cm",  1.0);
-  skip_largest_grab_visual_align_ = declare_parameter("skip_largest_grab_visual_align", true);
   empty_pillar_side_cm_           = declare_parameter("empty_pillar_side_cm", 32.0);
   drop_visual_anchor_enable_      = declare_parameter("drop_visual_anchor_enable",      true);
   drop_anchor_max_correction_cm_  = declare_parameter(
@@ -139,6 +130,8 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   route_choice_pub_      = create_publisher<std_msgs::msg::UInt8>("/route_choice", rclcpp::QoS(10).reliable());
   servo_pub_             = create_publisher<std_msgs::msg::UInt8>("/servo_control", rclcpp::QoS(10).reliable());
   electromagnet_pub_     = create_publisher<std_msgs::msg::UInt8>("/electromagnet_control", rclcpp::QoS(10).reliable());
+  height_control_mode_pub_ =
+    create_publisher<std_msgs::msg::UInt8>("/height_control_mode", durable_qos);
   buzzer_led_pub_        = create_publisher<std_msgs::msg::UInt8>("/buzzer_led_control", rclcpp::QoS(10).reliable());
   mission_complete_pub_  = create_publisher<std_msgs::msg::Empty>("/mission_complete", rclcpp::QoS(10).reliable());
   pickup_done_pub_       = create_publisher<std_msgs::msg::Empty>("/pickup_done", rclcpp::QoS(10).reliable());
@@ -150,6 +143,9 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   point_height_sub_ = create_subscription<std_msgs::msg::Int16>(
     "/height", rclcpp::QoS(10),
     std::bind(&PillarPickupMissionNode::pointHeightCallback, this, std::placeholders::_1));
+  pillar_top_distance_sub_ = create_subscription<std_msgs::msg::Float32>(
+    "/laser_array/min_range", rclcpp::QoS(10),
+    std::bind(&PillarPickupMissionNode::pillarTopDistanceCallback, this, std::placeholders::_1));
   fine_data_sub_ = create_subscription<std_msgs::msg::Int32MultiArray>(
     "/fine_data", rclcpp::QoS(10),
     std::bind(&PillarPickupMissionNode::fineDataCallback, this, std::placeholders::_1));
@@ -164,6 +160,7 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
 
   publishEnable(false);
   publishVisualTakeover(false);
+  publishHeightControlMode(false);
   publishBuzzerLed(false);   // 上电关闭声光
   republish_enabled_ = true;
   publishTarget(waypoints_[0]);
@@ -230,6 +227,15 @@ void PillarPickupMissionNode::pointHeightCallback(const std_msgs::msg::Int16::Sh
   if (msg->data == 32767) { return; }
   point_height_cm_ = static_cast<double>(msg->data);
   has_point_height_ = true;
+}
+
+void PillarPickupMissionNode::pillarTopDistanceCallback(const std_msgs::msg::Float32::SharedPtr msg)
+{
+  if (!std::isfinite(msg->data) || msg->data <= 0.0f) {
+    return;
+  }
+  pillar_top_distance_cm_ = static_cast<double>(msg->data) * 100.0;
+  has_pillar_top_distance_ = true;
 }
 
 void PillarPickupMissionNode::pillarsCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
@@ -343,6 +349,15 @@ void PillarPickupMissionNode::publishMagnet(bool on)
     static_cast<unsigned>(m.data), on ? "吸" : "松");
 }
 
+void PillarPickupMissionNode::publishHeightControlMode(bool pillar_top)
+{
+  std_msgs::msg::UInt8 m;
+  m.data = pillar_top ? 0x01 : 0x00;
+  height_control_mode_pub_->publish(m);
+  RCLCPP_INFO(get_logger(), "→ /height_control_mode = 0x%02X (%s)",
+    static_cast<unsigned>(m.data), pillar_top ? "柱顶距离" : "地面高度");
+}
+
 void PillarPickupMissionNode::publishBuzzerLed(bool on)
 {
   std_msgs::msg::UInt8 m;
@@ -382,8 +397,18 @@ bool PillarPickupMissionNode::isReached(const PickupWaypoint & wp, double x_cm, 
   const double dyaw = std::fabs(normalizeAngleDeg(wp.yaw_deg - yaw_deg));
 
   const bool xy_ok  = dxy <= pos_tol_cm_;
-  const bool z_ok   = dz  <= height_tol_cm_;
+  const bool grab_height_phase =
+    phase_ == MissionPhase::PICKUP && !descend_is_drop_ &&
+    (pickup_sub_ == PickupSub::DESCEND_MID ||
+     pickup_sub_ == PickupSub::RECENTER_MID ||
+     pickup_sub_ == PickupSub::DESCEND_FINAL ||
+     pickup_sub_ == PickupSub::HOVER_GRAB);
+  const bool z_ok   = dz  <= (grab_height_phase ? grab_height_tol_cm_ : height_tol_cm_);
   const bool yaw_ok = dyaw <= yaw_tol_deg_;
+
+  if (grab_height_phase) {
+    return z_ok;
+  }
 
   if (wp.z_cm > 20.0) {
     return z_ok && xy_ok;
@@ -413,11 +438,6 @@ bool PillarPickupMissionNode::isVisuallyAligned() const
     if (std::abs(p.second) > visual_pixel_tol_) { return false; }
   }
   return true;
-}
-
-bool PillarPickupMissionNode::shouldSkipGrabVisual() const
-{
-  return skip_largest_grab_visual_align_ && pickup_iter_ == 0;
 }
 
 void PillarPickupMissionNode::getDropTargetXY(double & x_cm, double & y_cm) const
@@ -608,6 +628,8 @@ void PillarPickupMissionNode::startLanding()
 {
   phase_ = MissionPhase::LAND;
   has_land_anchor_ = false;
+  publishHeightControlMode(false);
+  publishVisualTakeover(false);
 
   if (land_visual_enable_) {
     // 精准降落：飞到 B 上方 → 视觉对准 B 黑框中心 → 竖直降落（见 enterLandSub/stepLanding）。
@@ -1047,65 +1069,11 @@ void PillarPickupMissionNode::planPickupOrder()
 
 // ─────────── 第二趟：PICKUP ───────────
 
-// 按柱高生成分段下降的中停读数表（从高到低）。
-// 抓取末段读数 = R + 柱高 − grab_press；放置末段读数 = R + 空柱高 + 已叠高度 + drop_gap − drop_press。
-// 贪心：剩余 >= seg+tail 就下降 seg 并设一个中停对准点；剩余不足时直接盲降到末段。
-void PillarPickupMissionNode::buildDescendPlan(double pillar_height_cm, bool is_drop)
-{
-  descend_checkpoints_.clear();
-  descend_ckpt_idx_ = 0;
-
-  // 放置已改"叠面上方 drop_release_clearance 释放"（不贴死、不再 −drop_press）。
-  const double target_reading = is_drop
-    ? (ARM_GROUND_AREA_CM + pillar_height_cm + stack_count_ * plate_thickness_cm_ + drop_release_clearance_cm_)
-    : (ARM_GROUND_AREA_CM + pillar_height_cm - grab_press_cm_);
-  double cur = pillar_visit_height_cm_;
-  double remaining = cur - target_reading;
-  const bool is_min_plate = !is_drop && pickup_iter_ + 1 >= pickup_order_.size();
-  const double seg_base = is_min_plate ? descend_seg_len_min_plate_cm_ : descend_seg_len_cm_;
-  const double seg = std::max(1.0, seg_base);
-  const double tail = std::max(0.0, descend_min_tail_cm_);
-
-  // 抓取 A/B：direct_after_center / direct_no_remeasure 模式都不生成中停点 → 对准中心后直接盲降到位（不分段二次对准）。
-  const bool direct_grab = !is_drop &&
-    (grab_descend_mode_ == "direct_after_center" || grab_descend_mode_ == "direct_no_remeasure");
-
-  while (!direct_grab && remaining >= seg + tail) {
-    cur -= seg;
-    descend_checkpoints_.push_back(cur);
-    remaining -= seg;
-  }
-
-  RCLCPP_INFO(get_logger(),
-    "[铁片 %zu/%zu] %s下降[%s]：柱高=%.1f target=%.1f D=%.1fcm seg=%.1f → %zu 个中停点，末段盲降%.1fcm",
-    pickup_iter_ + 1, pickup_order_.size(), is_drop ? "放置" : "抓取",
-    is_drop ? "drop" : grab_descend_mode_.c_str(),
-    pillar_height_cm, target_reading, (pillar_visit_height_cm_ - target_reading),
-    seg, descend_checkpoints_.size(), remaining);
-}
-
-// 建表后进入下降：有中停点 → DESCEND_MID（分段对准），否则直接 DESCEND_FINAL（一把盲降）。
-void PillarPickupMissionNode::startGrabDescend()
-{
-  const std::size_t si = pickup_order_[pickup_iter_];
-  const double ph = has_pickup_live_height_ ? pickup_live_height_cm_
-                                            : survey_results_[si].height_cm;
-  descend_is_drop_ = false;
-  buildDescendPlan(ph, false);
-  if (descend_checkpoints_.empty()) {
-    enterPickupSub(PickupSub::DESCEND_FINAL);
-  } else {
-    enterPickupSub(PickupSub::DESCEND_MID);
-  }
-}
-
 void PillarPickupMissionNode::startDropDescend()
 {
   // 放置：CENTER_DROP 已对准空柱中心并固化 anchor，这里【对准一次后直接下降到叠面上方
   // drop_release_clearance】——不再分段反复追目标（叠片后近距视觉易被已放铁片干扰）。
   descend_is_drop_ = true;
-  descend_checkpoints_.clear();
-  descend_ckpt_idx_ = 0;
   enterPickupSub(PickupSub::DESCEND_FINAL);
 }
 
@@ -1118,103 +1086,64 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
   const std::size_t si = pickup_order_[pickup_iter_];
   const double px = survey_results_[si].x_cm;
   const double py = survey_results_[si].y_cm;
-  const double ph = has_pickup_live_height_ ? pickup_live_height_cm_ : survey_results_[si].height_cm;
 
   switch (s) {
     case PickupSub::APPROACH: {
       sub_target_ = PickupWaypoint{px, py, pillar_visit_height_cm_, 0.0, 0.0, "approach"};
       republish_enabled_ = true;
+      publishHeightControlMode(false);
       publishVisualTakeover(false);
       publishTarget(sub_target_);
       pickup_attempts_ = 0;
-      has_pickup_live_height_ = false;
-      pickup_live_height_cm_ = 0.0;
       break;
     }
     case PickupSub::CENTER: {
       sub_target_ = PickupWaypoint{px, py, pillar_visit_height_cm_, 0.0, 0.0, "center"};
       publishTarget(sub_target_);
-      if (shouldSkipGrabVisual()) {
-        republish_enabled_ = true;
-        publishVisualTakeover(false);
-        RCLCPP_INFO(get_logger(),
-          "[铁片 %zu/%zu] 最大铁片抓取跳过视觉微调，避免过正导致气动抖动",
-          pickup_iter_ + 1, pickup_order_.size());
-      } else {
-        republish_enabled_ = false;        // 视觉接管期间不重发位置目标
-        publishVisualTakeover(true);
-      }
-      break;
-    }
-    case PickupSub::MEASURE_HEIGHT_GRAB: {
-      double tx = px, ty = py;
-      applyCameraOffsetToTarget(tx, ty, 0.0);
-      sub_target_ = PickupWaypoint{tx, ty, pillar_visit_height_cm_, 0.0, 0.0, "pickup_measure_height"};
-      has_pickup_live_height_ = false;
-      height_hit_samples_.clear();
-      republish_enabled_ = true;
-      publishVisualTakeover(false);
-      publishTarget(sub_target_);
-      RCLCPP_INFO(get_logger(),
-        "[铁片 %zu/%zu] 抓取前现场测高：点阵移到柱心，超时回退第一趟柱高",
-        pickup_iter_ + 1, pickup_order_.size());
+      republish_enabled_ = false;
+      publishVisualTakeover(true);
       break;
     }
     case PickupSub::DESCEND_MID: {
-      publishVisualTakeover(false);
-      if (!descend_is_drop_) {
-        publishMagnet(true);   // 抓取下降一开始即通电，全程保持磁吸（早充磁）
-      }
-      const double z_ckpt = descend_checkpoints_[descend_ckpt_idx_];
+      publishHeightControlMode(true);
+      publishVisualTakeover(true);
+      publishMagnet(true);   // 抓取下降一开始即通电，全程保持磁吸（早充磁）
       double tx = px, ty = py;
-      if (descend_is_drop_) {
-        getDropTargetXY(tx, ty);
-      }
       applyArmOffsetToTarget(tx, ty, 0.0);
-      sub_target_ = PickupWaypoint{tx, ty, z_ckpt, 0.0, 0.0,
-        descend_is_drop_ ? "drop_descend_mid" : "descend_mid"};
+      sub_target_ = PickupWaypoint{tx, ty, grab_align_height_cm_, 0.0, 0.0, "descend_to_30cm"};
       republish_enabled_ = true;
       publishTarget(sub_target_);
       break;
     }
     case PickupSub::RECENTER_MID: {
-      // 在中停高度二次对准方框中心：开视觉接管，z 保持当前中停读数
-      const double z_ckpt = descend_checkpoints_[descend_ckpt_idx_];
+      publishHeightControlMode(true);
+      // 在距柱顶 30cm 处精确对准，z 保持当前柱顶距离目标
       double tx = px, ty = py;
-      if (descend_is_drop_) {
-        getDropTargetXY(tx, ty);
-      }
-      sub_target_ = PickupWaypoint{tx, ty, z_ckpt, 0.0, 0.0,
-        descend_is_drop_ ? "drop_recenter_mid" : "recenter_mid"};
+      sub_target_ = PickupWaypoint{tx, ty, grab_align_height_cm_, 0.0, 0.0, "recenter_at_30cm"};
       publishTarget(sub_target_);
-      if (!descend_is_drop_ && shouldSkipGrabVisual()) {
-        republish_enabled_ = true;
-        publishVisualTakeover(false);
-      } else {
-        republish_enabled_ = false;        // 视觉接管期间不重发位置目标
-        publishVisualTakeover(true);
-      }
+      republish_enabled_ = false;
+      publishVisualTakeover(true);
       break;
     }
     case PickupSub::DESCEND_FINAL: {
-      publishVisualTakeover(false);
       if (!descend_is_drop_) {
+        publishHeightControlMode(true);
+        publishVisualTakeover(true);
         publishMagnet(true);   // 确保磁吸保持（无中停的短下降直接进此段时也已通电）
       }
-      const double target_height = descend_is_drop_ ? empty_pillar_height_cm_ : ph;
-      // 放置末段=叠面上方 drop_release_clearance（不贴死再松磁）；抓取末段=R+柱高−grab_press。
+      // 放置末段仍用地面高度参照；抓取末段直接用距柱顶距离。
       const double z_final = descend_is_drop_
-        ? (ARM_GROUND_AREA_CM + target_height + stack_count_ * plate_thickness_cm_ + drop_release_clearance_cm_)
-        : (ARM_GROUND_AREA_CM + target_height - grab_press_cm_);
+        ? (ARM_GROUND_AREA_CM + empty_pillar_height_cm_ + stack_count_ * plate_thickness_cm_ + drop_release_clearance_cm_)
+        : grab_pick_height_cm_;
       double tx = px, ty = py;
       if (descend_is_drop_) {
+        publishHeightControlMode(false);
+        publishVisualTakeover(false);
         getDropTargetXY(tx, ty);
       }
       applyArmOffsetToTarget(tx, ty, 0.0);
-      // 抓取/放置末段都叠加 y 偏置补电磁铁吸取点物理偏置：抓取用 grab_final_dy，放置用 drop_final_dy
-      // （放置侧 5-23-16-16 实飞铁片偏 map+y=画面左滚落，故放置也补同向负偏置）
-      ty += descend_is_drop_ ? drop_final_dy_cm_ : grab_final_dy_cm_;
       if (descend_is_drop_) {
+        ty += drop_final_dy_cm_;
         tx += drop_final_dx_cm_;   // 放置专用 x 偏置（map +x=画面正上方）；抓取不加
       }
       sub_target_ = PickupWaypoint{tx, ty, z_final, 0.0, 0.0,
@@ -1226,6 +1155,8 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
     case PickupSub::HOVER_GRAB: {
       sub_hover_start_ = now();
       republish_enabled_ = false;
+      publishHeightControlMode(true);
+      publishVisualTakeover(true);
       RCLCPP_INFO(get_logger(),
         "[铁片 %zu/%zu] HOVER_GRAB: 机械臂伸出 + 吸磁，悬停 %.1fs",
         pickup_iter_ + 1, pickup_order_.size(), hover_grab_sec_);
@@ -1236,6 +1167,7 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
       break;
     }
     case PickupSub::CLIMB_BACK: {
+      publishHeightControlMode(false);
       publishVisualTakeover(false);
       sub_target_ = PickupWaypoint{px, py, pillar_visit_height_cm_, 0.0, 0.0, "climb_back"};
       republish_enabled_ = true;
@@ -1254,6 +1186,7 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
       break;
     }
     case PickupSub::GOTO_DROP: {
+      publishHeightControlMode(false);
       publishVisualTakeover(false);
       double tx = 0.0, ty = 0.0;
       getDropTargetXY(tx, ty);
@@ -1273,20 +1206,6 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
       publishTarget(sub_target_);
       republish_enabled_ = false;
       publishVisualTakeover(true);       // 对准空柱黑色边框中心
-      break;
-    }
-    case PickupSub::DESCEND_DROP: {
-      publishVisualTakeover(false);
-      const double base_h = empty_pillar_height_cm_;   // 空柱高第一趟已测好
-      // 面阵目标读数 = R + 空柱高 + 已叠 stack_count 层 + drop_gap（叠层顶上方轻放松磁）
-      const double z_drop = ARM_GROUND_AREA_CM + base_h
-                          + stack_count_ * plate_thickness_cm_ + drop_gap_cm_;
-      double tx = 0.0, ty = 0.0;
-      getDropTargetXY(tx, ty);
-      applyArmOffsetToTarget(tx, ty, 0.0);      // 机械臂吸取点(现与相机共轴, offset=0)
-      sub_target_ = PickupWaypoint{tx, ty, z_drop, 0.0, 0.0, "descend_drop"};
-      republish_enabled_ = true;
-      publishTarget(sub_target_);
       break;
     }
     case PickupSub::HOVER_DROP: {
@@ -1326,49 +1245,6 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
     }
   }
 
-  // ── 下降安全底线 ──
-  // 抓取下降三段(中停/二次对准/盲降)中，面阵读数一旦低于 R 再减几 cm（臂尖将到地面以下=物理不可能，
-  // 多半是柱高测错或飞机偏离柱子在往地面狂降，就是 5-23 第2片那种情况），立即中止下降、
-  // 不用人去拔：当作一次抓取失败，能重试就回 MEASURE_HEIGHT_GRAB（会重新爬回巡航高度重测），否则按用尽处理。
-  const bool in_grab_descend =
-    !descend_is_drop_ &&
-    (pickup_sub_ == PickupSub::DESCEND_MID ||
-     pickup_sub_ == PickupSub::RECENTER_MID ||
-     pickup_sub_ == PickupSub::DESCEND_FINAL);
-  if (in_grab_descend && has_area_height_ && area_height_cm_ < descend_abort_area_cm_) {
-    publishServo(false);   // 保险：收臂（此时本不应伸出）
-    ++pickup_attempts_;
-    RCLCPP_ERROR(get_logger(),
-      "[铁片 %zu/%zu] 下降触发安全底线：面阵=%.1fcm < %.1fcm，中止下降（尝试 %d/%d）",
-      pickup_iter_ + 1, pickup_order_.size(), area_height_cm_, descend_abort_area_cm_,
-      pickup_attempts_, pickup_max_attempts_);
-    carrying_plate_ = false;
-    if (pickup_attempts_ < pickup_max_attempts_) {
-      // direct_no_remeasure 不测高 → 回 CENTER 重新对准再直上直下；其余模式回测高态重测
-      enterPickupSub(grab_descend_mode_ == "direct_no_remeasure"
-                       ? PickupSub::CENTER : PickupSub::MEASURE_HEIGHT_GRAB);
-    } else {
-      // 本片用尽：松磁收臂，发 /pickup_failed，跳下一片；全部片用尽才降落（与 OBSERVE_GRAB 失败收尾一致）
-      RCLCPP_ERROR(get_logger(),
-        "[铁片 %zu/%zu] 本片 %d 次均触发安全底线，发布 /pickup_failed，尝试下一片",
-        pickup_iter_ + 1, pickup_order_.size(), pickup_attempts_);
-      publishMagnet(false);
-      publishServo(false);
-      std_msgs::msg::Empty e;
-      pickup_failed_pub_->publish(e);
-      ++pickup_iter_;
-      if (pickup_iter_ >= pickup_order_.size()) {
-        RCLCPP_ERROR(get_logger(), "全部 %zu 片均抓取失败，进入降落。", pickup_order_.size());
-        mission_complete_sent_ = true;
-        startLanding();
-      } else {
-        pickup_attempts_ = 0;
-        enterPickupSub(PickupSub::APPROACH);
-      }
-    }
-    return;
-  }
-
   switch (pickup_sub_) {
     case PickupSub::APPROACH:
       if (isReached(sub_target_, x_cm, y_cm, z_cm, 0.0)) {
@@ -1376,86 +1252,17 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
       }
       break;
     case PickupSub::CENTER:
-      if (shouldSkipGrabVisual() ||
-          isVisuallyAligned() ||
-          (now() - sub_enter_time_).seconds() > visual_align1_timeout_sec_) {
-        if (grab_descend_mode_ == "direct_no_remeasure") {
-          // 直上直下模式：对齐后不做现场测高（不移到点阵柱心、不重测），
-          // 直接用第一趟 survey 柱高从当前对准位竖直下降抓取。
-          has_pickup_live_height_ = false;
-          RCLCPP_INFO(get_logger(),
-            "[铁片 %zu/%zu] 对准完成[direct_no_remeasure]，跳过现场测高，直上直下抓取",
-            pickup_iter_ + 1, pickup_order_.size());
-          startGrabDescend();
-        } else {
-          RCLCPP_INFO(get_logger(),
-            "[铁片 %zu/%zu] 对准完成，进入抓取前现场测高",
-            pickup_iter_ + 1, pickup_order_.size());
-          enterPickupSub(PickupSub::MEASURE_HEIGHT_GRAB);
-        }
-      }
+      enterPickupSub(PickupSub::DESCEND_MID);
       break;
-    case PickupSub::MEASURE_HEIGHT_GRAB: {
-      const std::size_t si = pickup_order_[pickup_iter_];
-      double h = 0.0;
-      if (isReached(sub_target_, x_cm, y_cm, z_cm, 0.0) && tryStepHeight(h)) {
-        const PillarSurvey & sv = survey_results_[si];
-        if (sv.has_height &&
-            std::fabs(h - sv.height_cm) > live_height_consistency_cm_) {
-          // 现场重测与第一趟差太多 → 判现场不可信，回退第一趟柱高。
-          // 第一趟测高时机械臂收起、点阵无遮挡、停留久，最可信；现场重测在窄高柱上易被柱沿带偏。
-          RCLCPP_WARN(get_logger(),
-            "[铁片 %zu/%zu] 现场测高=%.1fcm 与第一趟=%.1fcm 差 %.1fcm(>%.1f)，判现场不可信，回退第一趟柱高下降",
-            pickup_iter_ + 1, pickup_order_.size(), h, sv.height_cm,
-            std::fabs(h - sv.height_cm), live_height_consistency_cm_);
-          has_pickup_live_height_ = false;   // startGrabDescend 将改用第一趟 survey 柱高
-        } else {
-          pickup_live_height_cm_ = h;
-          has_pickup_live_height_ = true;
-          RCLCPP_INFO(get_logger(),
-            "[铁片 %zu/%zu] 抓取前现场测得柱高=%.1fcm，进入下降抓取",
-            pickup_iter_ + 1, pickup_order_.size(), h);
-        }
-        startGrabDescend();
-      } else if ((now() - sub_enter_time_).seconds() > measure_height_timeout_sec_) {
-        has_pickup_live_height_ = false;
-        if (survey_results_[si].has_height) {
-          RCLCPP_WARN(get_logger(),
-            "[铁片 %zu/%zu] 抓取前现场测高超时(%.1fs)，回退第一趟柱高=%.1fcm",
-            pickup_iter_ + 1, pickup_order_.size(),
-            measure_height_timeout_sec_, survey_results_[si].height_cm);
-          startGrabDescend();
-        } else {
-          RCLCPP_WARN(get_logger(),
-            "[铁片 %zu/%zu] 现场测高超时且第一趟无柱高，跳过此片(不下降)",
-            pickup_iter_ + 1, pickup_order_.size());
-          ++pickup_iter_;
-          if (pickup_iter_ >= pickup_order_.size()) { startLanding(); }
-          else { enterPickupSub(PickupSub::APPROACH); }
-        }
-      }
-      break;
-    }
     case PickupSub::DESCEND_MID:
       if (isReached(sub_target_, x_cm, y_cm, z_cm, 0.0)) {
-        enterPickupSub(PickupSub::RECENTER_MID);   // 到中停点先二次对准
+        enterPickupSub(PickupSub::RECENTER_MID);   // 到 30cm 先精确对准
       }
       break;
     case PickupSub::RECENTER_MID: {
-      // 中停二次对准：对上 或 超时（防卡死）就继续往下一段
-      const bool aligned = isVisuallyAligned();
-      const bool skip_recenter = !descend_is_drop_ && shouldSkipGrabVisual();
-      if (skip_recenter || aligned ||
-          (now() - sub_enter_time_).seconds() > descend_recenter_timeout_sec_) {
-        if (descend_is_drop_ && aligned) {
-          updateDropAnchorFromVision(x_cm, y_cm, "drop_recenter_mid");
-        }
-        ++descend_ckpt_idx_;
-        if (descend_ckpt_idx_ < descend_checkpoints_.size()) {
-          enterPickupSub(PickupSub::DESCEND_MID);   // 还有中停段，继续分段下降
-        } else {
-          enterPickupSub(PickupSub::DESCEND_FINAL); // 最后一段盲降到位
-        }
+      // 30cm 高度处要求视觉误差连续 visual_align_required_hits 帧小于容错，再下降到 10cm。
+      if (isVisuallyAligned()) {
+        enterPickupSub(PickupSub::DESCEND_FINAL);
       }
       break;
     }
@@ -1468,7 +1275,6 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
       if ((now() - sub_hover_start_).seconds() >= hover_grab_sec_) {
         publishServo(false);   // 收起机械臂（电磁铁保持吸住）
         ++pickup_attempts_;
-        carrying_plate_ = true;
         enterPickupSub(PickupSub::CLIMB_BACK);
       }
       break;
@@ -1492,13 +1298,11 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
       }
 
       // 抓取失败：电磁铁保持通电，决定重试还是放弃
-      carrying_plate_ = false;
       if (pickup_attempts_ < pickup_max_attempts_) {
         RCLCPP_WARN(get_logger(),
           "[铁片 %zu/%zu] 抓取失败（尝试 %d/%d），重新下降再试",
           pickup_iter_ + 1, pickup_order_.size(), pickup_attempts_, pickup_max_attempts_);
-        enterPickupSub(grab_descend_mode_ == "direct_no_remeasure"
-                         ? PickupSub::CENTER : PickupSub::MEASURE_HEIGHT_GRAB);
+        enterPickupSub(PickupSub::CENTER);
       } else {
         // 本片 3 次都失败：松磁收臂，发 /pickup_failed，然后【跳下一片】，
         // 不直接降落。所有片各自试满 pickup_max_attempts 次仍失败，才进降落。
@@ -1551,11 +1355,6 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
       }
       break;
     }
-    case PickupSub::DESCEND_DROP:
-      if (isReached(sub_target_, x_cm, y_cm, z_cm, 0.0)) {
-        enterPickupSub(PickupSub::HOVER_DROP);
-      }
-      break;
     case PickupSub::HOVER_DROP: {
       const double elapsed = (now() - sub_hover_start_).seconds();
       if (!drop_released_ && elapsed >= arm_extend_sec_) {
@@ -1566,7 +1365,6 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
       }
       if (elapsed >= arm_extend_sec_ + drop_post_release_hover_sec_) {
         publishServo(false);
-        carrying_plate_ = false;
         ++stack_count_;   // 这一片已叠上
         descend_is_drop_ = false;
         enterPickupSub(PickupSub::CLIMB_AFTER_DROP);
@@ -1601,7 +1399,15 @@ void PillarPickupMissionNode::monitorTimerCallback()
 
   double x_cm = 0.0, y_cm = 0.0, yaw_deg = 0.0;
   if (!getCurrentPose(x_cm, y_cm, yaw_deg)) { return; }
-  const double z_cm = has_area_height_ ? area_height_cm_ : 0.0;
+  const bool pickup_uses_pillar_height =
+    phase_ == MissionPhase::PICKUP && !descend_is_drop_ &&
+    (pickup_sub_ == PickupSub::DESCEND_MID ||
+     pickup_sub_ == PickupSub::RECENTER_MID ||
+     pickup_sub_ == PickupSub::DESCEND_FINAL ||
+     pickup_sub_ == PickupSub::HOVER_GRAB);
+  const double z_cm = (pickup_uses_pillar_height && has_pillar_top_distance_)
+    ? pillar_top_distance_cm_
+    : (has_area_height_ ? area_height_cm_ : 0.0);
 
   switch (phase_) {
     case MissionPhase::WAIT_PILLARS:

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 namespace pid_control_pkg
 {
@@ -131,6 +132,12 @@ PositionPIDController::PositionPIDController()
   current_y_cm_(0.0),
   current_yaw_deg_(0.0),
   current_z_cm_(0.0),
+  current_ground_height_cm_(0.0),
+  current_pillar_height_cm_(0.0),
+  has_ground_height_(false),
+  has_pillar_height_(false),
+  dual_height_mode_(false),
+  height_control_mode_(0),
   control_frequency_(50.0),
   map_frame_("map"),
   laser_link_frame_("laser_link"),
@@ -145,7 +152,7 @@ PositionPIDController::PositionPIDController()
   visual_kd_y_(0.01),
   visual_pixel_deadzone_(5.0),
   visual_max_xy_velocity_(20.0),
-  visual_data_timeout_sec_(0.5),
+  visual_data_timeout_sec_(0.4),
   distance_xy_cm_(0.0),
   error_x_cm_(0.0),
   error_y_cm_(0.0),
@@ -165,9 +172,22 @@ PositionPIDController::PositionPIDController()
   target_position_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
     "/target_position", rclcpp::QoS(10),
     std::bind(&PositionPIDController::targetPositionCallback, this, std::placeholders::_1));
-  height_sub_ = create_subscription<std_msgs::msg::Int16>(
-    "/height", rclcpp::QoS(10),
-    std::bind(&PositionPIDController::heightCallback, this, std::placeholders::_1));
+  if (dual_height_mode_) {
+    ground_height_sub_ = create_subscription<std_msgs::msg::Int16>(
+      "/laser_array/ground_height", rclcpp::QoS(10),
+      std::bind(&PositionPIDController::groundHeightCallback, this, std::placeholders::_1));
+    pillar_height_sub_ = create_subscription<std_msgs::msg::Float32>(
+      "/laser_array/min_range", rclcpp::QoS(10),
+      std::bind(&PositionPIDController::pillarHeightCallback, this, std::placeholders::_1));
+    auto mode_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
+    height_control_mode_sub_ = create_subscription<std_msgs::msg::UInt8>(
+      "/height_control_mode", mode_qos,
+      std::bind(&PositionPIDController::heightControlModeCallback, this, std::placeholders::_1));
+  } else {
+    height_sub_ = create_subscription<std_msgs::msg::Int16>(
+      "/height", rclcpp::QoS(10),
+      std::bind(&PositionPIDController::heightCallback, this, std::placeholders::_1));
+  }
 
   auto takeover_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
   visual_takeover_sub_ = create_subscription<std_msgs::msg::Bool>(
@@ -211,6 +231,52 @@ void PositionPIDController::heightCallback(const std_msgs::msg::Int16::SharedPtr
 {
   current_z_cm_ = static_cast<double>(msg->data);
   has_target_height_ = true;
+}
+
+void PositionPIDController::groundHeightCallback(const std_msgs::msg::Int16::SharedPtr msg)
+{
+  current_ground_height_cm_ = static_cast<double>(msg->data);
+  has_ground_height_ = true;
+  if (height_control_mode_ == 0) {
+    current_z_cm_ = current_ground_height_cm_;
+    has_target_height_ = true;
+  }
+}
+
+void PositionPIDController::pillarHeightCallback(const std_msgs::msg::Float32::SharedPtr msg)
+{
+  if (!std::isfinite(msg->data) || msg->data <= 0.0f) {
+    return;
+  }
+  current_pillar_height_cm_ = static_cast<double>(msg->data) * 100.0;
+  has_pillar_height_ = true;
+  if (height_control_mode_ == 1) {
+    current_z_cm_ = current_pillar_height_cm_;
+    has_target_height_ = true;
+  }
+}
+
+void PositionPIDController::heightControlModeCallback(const std_msgs::msg::UInt8::SharedPtr msg)
+{
+  const uint8_t new_mode = msg->data == 1 ? 1 : 0;
+  if (height_control_mode_ == new_mode) {
+    return;
+  }
+  height_control_mode_ = new_mode;
+  pid_z_.reset();
+
+  if (height_control_mode_ == 1 && has_pillar_height_) {
+    current_z_cm_ = current_pillar_height_cm_;
+    has_target_height_ = true;
+  } else if (height_control_mode_ == 0 && has_ground_height_) {
+    current_z_cm_ = current_ground_height_cm_;
+    has_target_height_ = true;
+  } else {
+    has_target_height_ = false;
+  }
+
+  RCLCPP_INFO(get_logger(), "Height control mode: %s",
+    height_control_mode_ == 1 ? "pillar_top_min_range" : "ground_height");
 }
 
 void PositionPIDController::visualTakeoverCallback(const std_msgs::msg::Bool::SharedPtr msg)
@@ -421,7 +487,8 @@ void PositionPIDController::loadParameters()
   visual_kd_y_ = declare_parameter<double>("visual_kd_y", 0.01);
   visual_pixel_deadzone_ = declare_parameter<double>("visual_pixel_deadzone", 5.0);
   visual_max_xy_velocity_ = declare_parameter<double>("visual_max_xy_velocity", 20.0);
-  visual_data_timeout_sec_ = declare_parameter<double>("visual_data_timeout_sec", 0.5);
+  visual_data_timeout_sec_ = declare_parameter<double>("visual_data_timeout_sec", 0.4);
+  dual_height_mode_ = declare_parameter<bool>("dual_height_mode", false);
 
   pid_yaw_.setPID(kp_yaw, ki_yaw, kd_yaw);
   pid_z_.setPID(kp_z, ki_z, kd_z);
@@ -449,6 +516,8 @@ void PositionPIDController::loadParameters()
   RCLCPP_INFO(get_logger(),
     "Velocity limits: linear=%.1fcm/s angular=%.1fdeg/s vertical=%.1fcm/s",
     max_linear_vel_, max_angular_vel_, max_vertical_vel_);
+  RCLCPP_INFO(get_logger(), "Height input mode: %s",
+    dual_height_mode_ ? "dual (/laser_array/ground_height + /laser_array/min_range)" : "single (/height)");
 }
 
 }  // 命名空间 pid_control_pkg

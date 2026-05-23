@@ -6,21 +6,99 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    # 抓取下降模式 A/B：可在命令行用 grab_descend_mode:=direct_after_center 切换。
-    grab_descend_mode = LaunchConfiguration("grab_descend_mode")
     # 放置末段 xy 偏置：可在命令行直接覆盖，如 drop_final_dy_cm:=-6.0 drop_final_dx_cm:=4.0
     drop_final_dy_cm = LaunchConfiguration("drop_final_dy_cm")
     drop_final_dx_cm = LaunchConfiguration("drop_final_dx_cm")
+
+    def p(name, value_type=float):
+        return ParameterValue(LaunchConfiguration(name), value_type=value_type)
+
     return LaunchDescription([
+        # ===== 常调：到点/高度容差 =====
         DeclareLaunchArgument(
-            "grab_descend_mode", default_value="segmented",
-            description="抓取下降模式：segmented(分段中停二次对准) / direct_after_center(对准+现场测高后直接盲降) / direct_no_remeasure(对准后跳过现场测高，直上直下抓取)"),
+            "position_tolerance_cm", default_value="9.0",
+            description="地图航点到达 XY 容差(cm)，越小越准但更容易卡住"),
+        DeclareLaunchArgument(
+            "height_tolerance_cm", default_value="8.0",
+            description="普通地面高度模式到达容差(cm)，巡航/放置/降落使用"),
+
+        # ===== 常调：视觉对准判定 =====
+        DeclareLaunchArgument(
+            "visual_align1_timeout_sec", default_value="4.0",
+            description="第一次视觉对准最大等待时间(s)，柱子/降落框都使用"),
+        DeclareLaunchArgument(
+            "visual_align2_timeout_sec", default_value="1.5",
+            description="二次复对准最大等待时间(s)，用于更近距离精对"),
+        DeclareLaunchArgument(
+            "visual_pixel_tol_px", default_value="30",
+            description="视觉认为已对准的像素容差(px)，抓取要求连续满足多帧"),
+        DeclareLaunchArgument(
+            "visual_align_required_hits", default_value="3",
+            description="视觉误差进入容差后需要连续满足的帧数，抓取精对默认 3 帧"),
+        DeclareLaunchArgument(
+            "visual_jump_px", default_value="100",
+            description="视觉中心单帧跳变过滤阈值(px)，误检跳太大时丢弃该帧"),
+        DeclareLaunchArgument(
+            "visual_stale_sec", default_value="0.4",
+            description="任务侧视觉数据失效时间(s)，超过后不认为视觉可用"),
+
+        # ===== 常调：航行/降落高度 =====
+        DeclareLaunchArgument(
+            "pillar_visit_height_cm", default_value="140.0",
+            description="第二趟到柱子上方的巡航高度(cm)，使用地面高度控制"),
+        DeclareLaunchArgument(
+            "land_align_height_cm", default_value="140.0",
+            description="降落前视觉对准起停区 B 的高度(cm)，要能看全黑框"),
+        DeclareLaunchArgument(
+            "land_recenter_drop_cm", default_value="60.0",
+            description="降落第一次对准后下探多少厘米再二次对准；0 表示不二次对准"),
+
+        # ===== 常调：抓取高度 =====
+        DeclareLaunchArgument(
+            "grab_align_height_cm", default_value="30.0",
+            description="到柱子航点后，切柱顶距离控制并先下降到距柱顶高度(cm)做精对"),
+        DeclareLaunchArgument(
+            "grab_pick_height_cm", default_value="10.0",
+            description="精对连续满足后，继续下降到距柱顶高度(cm)伸臂吸取"),
+        DeclareLaunchArgument(
+            "grab_height_tolerance_cm", default_value="3.0",
+            description="抓取阶段柱顶距离高度容差(cm)，用于 30cm/10cm 到位判断"),
+
+        # ===== 常调：放置/机械臂时序 =====
         DeclareLaunchArgument(
             "drop_final_dy_cm", default_value="-2.0",
             description="放置末段 y 偏置(cm)，map +y=画面左；偏左滚落可加到 -6~-7"),
         DeclareLaunchArgument(
             "drop_final_dx_cm", default_value="4.0",
             description="放置末段 x 偏置(cm)，map +x=画面正上方，正值往前补"),
+        DeclareLaunchArgument(
+            "drop_release_clearance_cm", default_value="10.0",
+            description="放置时叠面上方预留高度(cm)，太低易蹭片，太高易飘落"),
+        DeclareLaunchArgument(
+            "drop_post_release_hover_sec", default_value="1.0",
+            description="松磁后原地悬停时间(s)，等铁片稳定后再收臂"),
+        DeclareLaunchArgument(
+            "arm_extend_sec", default_value="1.2",
+            description="放置时伸臂到位等待时间(s)，到位后才松电磁铁"),
+        DeclareLaunchArgument(
+            "hover_grab_sec", default_value="1.0",
+            description="抓取到 10cm 后保持吸磁/伸臂的等待时间(s)"),
+
+        # ===== 常调：抓取结果确认 =====
+        DeclareLaunchArgument(
+            "pickup_check_observe_sec", default_value="2.0",
+            description="抓完爬升后观察铁片是否还在柱上的时间(s)"),
+        DeclareLaunchArgument(
+            "pickup_observe_plate_frames_required", default_value="3",
+            description="观察期间连续看到铁片多少帧才判定抓取失败并重试"),
+        DeclareLaunchArgument(
+            "pickup_max_attempts", default_value="3",
+            description="单个铁片最多抓取尝试次数"),
+
+        # ===== 调试开关：正式比赛保持 false =====
+        DeclareLaunchArgument(
+            "measure_only_mode", default_value="false",
+            description="true 时只跑第一趟测高/占比后降落，不进入抓取叠放"),
         Node(
             package="activity_control_pkg",
             executable="pillar_pickup_mission",
@@ -31,9 +109,9 @@ def generate_launch_description():
                 "laser_link_frame": "laser_link",
 
                 # 到达容差
-                "position_tolerance_cm": 9.0,
+                "position_tolerance_cm": p("position_tolerance_cm"),
                 "yaw_tolerance_deg": 5.0,
-                "height_tolerance_cm": 12.0,
+                "height_tolerance_cm": p("height_tolerance_cm"),
 
                 # 航线数值
                 # SCAN 阶段飞行高度：用于起飞和扫描终点，低空飞行便于柱子检测
@@ -42,7 +120,7 @@ def generate_launch_description():
                 "scan_end_x_cm": 250.0,
                 "landing_x_cm": 250.0,
                 "landing_y_cm": -250.0,
-                "pillar_visit_height_cm": 150.0,
+                "pillar_visit_height_cm": p("pillar_visit_height_cm"),
                 "pillar_wait_timeout_sec": 3.0,
 
                 # 精准降落：飞到对角起停区 B 上方先用视觉对准 B 黑色方框中心，再竖直降落。
@@ -50,20 +128,18 @@ def generate_launch_description():
                 # land_align_height_cm 是对准 B 框时的悬停高度（要能看全 ~50cm 框；默认=巡航 150，
                 # 此高度 50cm 框居中、对角的 A 框在视野外，rect_center_bias 会优先锁正下方的 B）。
                 "land_visual_enable": True,
-                "land_align_height_cm": 150.0,
+                "land_align_height_cm": p("land_align_height_cm"),
                 # 第一次对准后再下降 land_recenter_drop_cm 到中停高度，二次对准 B 框一次（更近、像素更准）再降到底。
                 # 默认 60：从 150 降到 90 再对一次。设 0 则不分段（对准一次后直接降到底）。
-                "land_recenter_drop_cm": 60.0,
+                "land_recenter_drop_cm": p("land_recenter_drop_cm"),
 
                 # 视觉对准
-                "visual_align1_timeout_sec": 4.0,
-                "visual_align2_timeout_sec": 1.5,
-                # 抓取下降中停二次对准超时(s)：对上或超时就继续往下，防卡死
-                "descend_recenter_timeout_sec": 2.5,
-                "visual_pixel_tol_px": 15,
-                "visual_align_required_hits": 3,
-                "visual_jump_px": 100,
-                "visual_stale_sec": 0.5,
+                "visual_align1_timeout_sec": p("visual_align1_timeout_sec"),
+                "visual_align2_timeout_sec": p("visual_align2_timeout_sec"),
+                "visual_pixel_tol_px": p("visual_pixel_tol_px", int),
+                "visual_align_required_hits": p("visual_align_required_hits", int),
+                "visual_jump_px": p("visual_jump_px"),
+                "visual_stale_sec": p("visual_stale_sec"),
 
                 # 摄像头→点阵激光 xy 偏置（cm，机体系=map系，yaw全程0）。仅用于“测高”那步：
                 # 视觉把柱子对到相机正中后，机体按此偏置平移，让点阵正对柱心再测高。
@@ -86,19 +162,15 @@ def generate_launch_description():
                 "sample_min_pillar_frames": 8,
                 "sample_pillar_drop_thresh_cm": 20.0,
 
-                # 测柱高：窗口内累计所有“点阵打中柱顶”(drop≥sample_pillar_drop_thresh_cm)的帧，
+                # 第一趟测柱高：窗口内累计所有“点阵打中柱顶”(drop≥sample_pillar_drop_thresh_cm)的帧，
                 # 攒够 height_min_hit_frames 帧后【分簇】：排序按 height_cluster_gap_cm 间隔切簇，
                 # 在帧数≥height_min_cluster_frames 的簇里取【中位数最高】的那簇=真柱顶（柱顶给最大drop，
                 # 柱沿/半遮挡给偏小值会把中位数拉低——5-23 柱0 被测成 38 即此因）。超时仍没合格簇 → 柱高未知。
-                # 第一趟(MEASURE_HEIGHT,机械臂收起点阵无遮挡)测好存起来；第二趟抓取前再现场重测一次，
-                # 与第一趟差 >live_height_consistency_cm 则判现场不可信、回退第一趟值（见下）。
+                # 第二趟抓取不再使用柱高；柱高只给放置高度兜底。
                 "measure_height_timeout_sec": 5.0,
                 "height_min_hit_frames": 10,
                 "height_cluster_gap_cm": 8.0,
                 "height_min_cluster_frames": 3,
-                # 第二趟抓取前现场重测与第一趟柱高的最大可信差(cm)。超过=现场不可信→回退第一趟值。
-                # 量级参考：好的情况两趟差 ~4cm；5-23 柱0 暴雷差到 48cm。设 15 给激光互差留余量又能拦暴雷。
-                "live_height_consistency_cm": 15.0,
 
                 # 铁片占比采样（判大小，决定叠放顺序）。第一趟 CENTER 期间累积
                 # /circle_area_ratio，少于此帧数则判该柱为空柱（无铁片）。
@@ -110,39 +182,15 @@ def generate_launch_description():
                 "survey_signal_hold_sec": 3.0,
 
                 # 下降 / 抓取 / 叠放（z 全是面阵目标读数；下降参照 R=ARM_GROUND_AREA_CM 是宏，改在 hpp）
-                # 抓取目标 z = R + 柱高 − grab_press；放置 z = R + 空柱高 + 已叠层×plate_thickness + drop_gap − drop_press。
-                # mid_clearance_cm 已废弃（抓取改为分段下降），保留仅避免参数报错。
-                "mid_clearance_cm": 30.0,
-                # 抓取分段下降：每段下降量 seg(cm) + 末段盲降下限 tail(cm)。
-                # 总下降量 D=巡航150−(R+柱高−grab_press)；剩余≥seg+tail(=50)就降30并对准一次，
-                # 否则末段直接盲降到位（末段≈[20,49]cm）。
-                "descend_seg_len_cm": 30.0,
-                # 抓取最小片（pickup_order 末位）时用更密的 20cm 分段；放置不加密，仍用 descend_seg_len_cm。
-                "descend_seg_len_min_plate_cm": 20.0,
-                "descend_min_tail_cm": 20.0,
-                # 下降安全底线(cm)：抓取下降中面阵读数 < 此值（臂尖将到地面以下=物理不可能，多半柱高测错
-                # 或飞机偏离柱子在往地面狂降）立即中止下降、爬回重测重试，不用人工拔电。
-                # 取 R(臂触地面阵读数,宏 ARM_GROUND_AREA_CM=27) 再减 ~5cm 余量 = 22。短柱正常抓取面阵不会低于 R，不误触发。
-                "descend_abort_area_cm": 22.0,
-                # 抓取下压量(cm)：z=R+柱高-grab_press。grab_press 越大降得越低。
-                # 5-23 分段下降版实飞：grab_press=0 时臂尖停在柱顶面上方约4cm够不到 → 设 4。
-                # 还吸不牢够不到→继续回调正值；反而下降过头压坏→回调（最小到 0 或设负值）。
-                "grab_press_cm": 4.0,
-                # 抓取下降模式 A/B 实验开关：
-                #   "segmented"          = 当前方案：CENTER 对准一次 → 下降中每段 RECENTER_MID 再对准（默认）。
-                #   "direct_after_center"= CENTER 对准一次后直接盲降到抓取高度，下降途中不再视觉微调。
-                # 两种模式都【会先在 CENTER 微调一次】，区别只在下降途中是否继续分段对准。切换即做对比试飞。
-                # 命令行覆盖：... grab_descend_mode:=direct_after_center
-                "grab_descend_mode": grab_descend_mode,
-                # ↓ drop_gap_cm/drop_press_cm 已弃用（放置改"叠面上方释放"），保留仅避免参数报错。
-                "drop_gap_cm": 0.0,
-                "drop_press_cm": 2.0,
+                # 抓取阶段切到柱顶距离控制：先距柱顶 30cm 精对，再距柱顶 10cm 伸臂吸取。
+                "grab_align_height_cm": p("grab_align_height_cm"),
+                "grab_pick_height_cm": p("grab_pick_height_cm"),
+                "grab_height_tolerance_cm": p("grab_height_tolerance_cm"),
+                # 放置 z = R + 空柱高 + 已叠层×plate_thickness + drop_release_clearance。
                 # 放置末段不贴死：目标=叠面上方 drop_release_clearance(cm)。对准一次中心→直接降到此高度→
                 # 伸臂→松磁→悬停 drop_post_release_hover_sec→收臂。避免贴近接触摩擦/下压/惯性把片带歪。
-                "drop_release_clearance_cm": 10.0,
-                "drop_post_release_hover_sec": 1.0,
-                # 抓取末段盲降额外 y 偏置(cm)：只用于抓取 DESCEND_FINAL。
-                "grab_final_dy_cm": -2.0,
+                "drop_release_clearance_cm": p("drop_release_clearance_cm"),
+                "drop_post_release_hover_sec": p("drop_post_release_hover_sec"),
                 # 放置末段额外 y 偏置(cm)：补电磁铁吸取点物理偏置，防铁片偏左(map+y)滚落。
                 # 与 grab 同向(负)。可命令行覆盖：drop_final_dy_cm:=-6.0
                 "drop_final_dy_cm": ParameterValue(drop_final_dy_cm, value_type=float),
@@ -150,16 +198,11 @@ def generate_launch_description():
                 # 可命令行覆盖：drop_final_dx_cm:=4.0
                 "drop_final_dx_cm": ParameterValue(drop_final_dx_cm, value_type=float),
                 # 放置释放时序：先伸臂，等机械臂到位(arm_extend_sec)后松磁，再悬停(drop_post_release_hover_sec)收臂。
-                "arm_extend_sec": 1.2,
-                # ↓ drop_settle_sec 已弃用（放置改用 drop_post_release_hover_sec），保留仅避免参数报错。
-                "drop_settle_sec": 0.5,
-                # 抓取到位后悬停等待机械臂动作完成；放置侧现在用 arm_extend_sec + drop_settle_sec。
-                "hover_grab_sec": 1.0,
+                "arm_extend_sec": p("arm_extend_sec"),
+                # 抓取到位后悬停等待机械臂动作完成；放置侧现在用 arm_extend_sec + drop_post_release_hover_sec。
+                "hover_grab_sec": p("hover_grab_sec"),
                 # 每片铁片厚度（cm）：叠放时每多一层，放置落点抬高这么多
                 "plate_thickness_cm": 1.0,
-
-                # 最大铁片抓取本来很准，跳过抓取视觉微调；放置仍使用空柱视觉对齐。
-                "skip_largest_grab_visual_align": True,
 
                 # 空柱放置 anchor：视觉确认后记录当前实际位置，后续下降/叠放复用。
                 # 首次允许最多约 24cm 修正（覆盖 32cm 大空柱半边长 16cm + 飞行误差），
@@ -174,14 +217,14 @@ def generate_launch_description():
                 # (含测高 + 读占比) 然后降落，不抓取。测高已挪回第一趟，两者现等效，
                 # 都可用来单独验证“测高 + 占比排序”而不真抓。正式跑抓取叠放时两者都设 False。
                 "traverse_only_mode": False,
-                "measure_only_mode": False,   # 正式跑：第一趟测高+占比 → 第二趟抓取叠放
+                "measure_only_mode": p("measure_only_mode", bool),   # 正式跑：第一趟测高+占比 → 第二趟抓取叠放
 
                 # 抓取观察 + 重试：CLIMB_BACK 到位后悬停 N 秒看 /circle_area_ratio 是否仍非 NaN，
                 # 仍能识别出铁片即视为抓取失败，最多重试 pickup_max_attempts 次
-                "pickup_check_observe_sec": 2.0,
+                "pickup_check_observe_sec": p("pickup_check_observe_sec"),
                 # OBSERVE 期间连续 N 帧还能看到真黑圆盘，才判抓取失败；NaN/空柱不累计。
-                "pickup_observe_plate_frames_required": 3,
-                "pickup_max_attempts": 3,
+                "pickup_observe_plate_frames_required": p("pickup_observe_plate_frames_required", int),
+                "pickup_max_attempts": p("pickup_max_attempts", int),
             }],
         )
     ])

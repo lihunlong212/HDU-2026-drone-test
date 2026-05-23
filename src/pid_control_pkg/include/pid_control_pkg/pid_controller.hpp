@@ -2,14 +2,17 @@
 #define PID_CONTROL_PKG__PID_CONTROLLER_HPP_
 
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <string>
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/int16.hpp>
 #include <std_msgs/msg/int32_multi_array.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/buffer.h>
@@ -65,6 +68,9 @@ public:
 private:
   void targetPositionCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
   void heightCallback(const std_msgs::msg::Int16::SharedPtr msg);
+  void groundHeightCallback(const std_msgs::msg::Int16::SharedPtr msg);
+  void pillarHeightCallback(const std_msgs::msg::Float32::SharedPtr msg);
+  void heightControlModeCallback(const std_msgs::msg::UInt8::SharedPtr msg);
   void visualTakeoverCallback(const std_msgs::msg::Bool::SharedPtr msg);
   void fineDataCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg);
   void controlTimerCallback();
@@ -81,6 +87,9 @@ private:
 
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr target_position_sub_;
   rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr height_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr ground_height_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr pillar_height_sub_;
+  rclcpp::Subscription<std_msgs::msg::UInt8>::SharedPtr height_control_mode_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr visual_takeover_sub_;
   rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr fine_data_sub_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr target_velocity_pub_;
@@ -106,6 +115,12 @@ private:
   double current_y_cm_;
   double current_yaw_deg_;
   double current_z_cm_;
+  double current_ground_height_cm_;
+  double current_pillar_height_cm_;
+  bool has_ground_height_;
+  bool has_pillar_height_;
+  bool dual_height_mode_;
+  uint8_t height_control_mode_;
 
   double control_frequency_;
   std::string map_frame_;

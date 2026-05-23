@@ -119,16 +119,14 @@ enum class PickupSub
 {
   APPROACH,         // 飞到目标柱上方巡航高度
   CENTER,           // 视觉对准铁片中心（接管，xy 精对）
-  MEASURE_HEIGHT_GRAB, // 抓取下降前现场测当前柱高；失败回退第一趟柱高
-  DESCEND_MID,      // 下降到下一个中停读数（分段下降；进入第一段即开电磁铁早充磁）
-  RECENTER_MID,     // 中停高度二次视觉对准（分段对准，带超时防卡死）
-  DESCEND_FINAL,    // 盲降到 R + 柱高 − grab_press（最后一段，压住吸取）
+  DESCEND_MID,      // 视觉接管 + 用柱顶距离下降到抓取预对准高度
+  RECENTER_MID,     // 在柱顶上方预对准高度精确对准（连续命中后进入最终下降）
+  DESCEND_FINAL,    // 视觉接管 + 用柱顶距离下降到抓取高度
   HOVER_GRAB,       // 机械臂伸出 + 吸磁，悬停
   CLIMB_BACK,       // 爬回巡航高度
   OBSERVE_GRAB,     // 观察 /circle_area_ratio 判抓取成败 / 重试
   GOTO_DROP,        // 飞到空柱上方
   CENTER_DROP,      // 视觉对准空柱边框中心（接管，仅 xy 精对；空柱高第一趟已测）
-  DESCEND_DROP,     // 下降到 R + 空柱高 + 已叠高度 + drop_gap
   HOVER_DROP,       // 机械臂伸出 + 松磁，悬停
   CLIMB_AFTER_DROP  // 爬回巡航高度
 };
@@ -152,6 +150,7 @@ private:
   // ── 回调 ──
   void areaHeightCallback(const std_msgs::msg::Int16::SharedPtr msg);
   void pointHeightCallback(const std_msgs::msg::Int16::SharedPtr msg);
+  void pillarTopDistanceCallback(const std_msgs::msg::Float32::SharedPtr msg);
   void pillarsCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
   void fineDataCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg);
   void circleRatioCallback(const std_msgs::msg::Float32::SharedPtr msg);
@@ -169,6 +168,7 @@ private:
   void publishActiveController(uint8_t mode);
   void publishServo(bool extended);   // true=机械臂伸出, false=收起（串口帧 0x11）
   void publishMagnet(bool on);        // true=吸, false=松（串口帧 0x33）
+  void publishHeightControlMode(bool pillar_top); // false=地面高度, true=柱顶距离
   void publishBuzzerLed(bool on);     // true=蜂鸣器+LED开, false=关（串口帧 0x22）
 
   // ── 阶段步进 ──
@@ -182,9 +182,7 @@ private:
   void stepPickup(double x_cm, double y_cm, double z_cm);
   void enterLandSub(LandSub s);
   void stepLanding(double x_cm, double y_cm, double z_cm);  // 视觉对准 B 框精准降落
-  void buildDescendPlan(double pillar_height_cm, bool is_drop);  // 按柱高生成分段中停读数表
-  void startGrabDescend();                         // 建表后进入下降（有中停→DESCEND_MID，否则直接 FINAL）
-  void startDropDescend();                         // 放置侧复用分段下降/中停对准
+  void startDropDescend();                         // 放置侧对准一次后直接下降到叠面上方释放高度
   void startLanding();
 
   // ── 工具 ──
@@ -195,7 +193,6 @@ private:
 
   bool isVisuallyAligned() const;
   void recordFineData(int dx_px, int dy_px);
-  bool shouldSkipGrabVisual() const;
   void getDropTargetXY(double & x_cm, double & y_cm) const;
   bool dropVisionCircleVeto() const;
   void updateDropAnchorFromVision(double x_cm, double y_cm, const char * reason);
@@ -255,7 +252,6 @@ private:
   int    height_min_hit_frames_;          // 累计多少帧点阵打中柱顶(drop≥阈值)才开始分簇出结果
   double height_cluster_gap_cm_;          // 分簇间隔：排序后相邻 drop 间隔 > 此值即切簇（默认8）
   int    height_min_cluster_frames_;      // 一个簇至少多少帧才可信（滤单帧毛刺，默认3）
-  double live_height_consistency_cm_;     // 现场重测与第一趟柱高差 > 此值 → 判现场不可信，回退第一趟（默认15）
 
   // 铁片占比采样（判大小）
   int    plate_min_ratio_frames_;   // 合格占比样本最少帧数（少于则判为空柱）
@@ -263,28 +259,17 @@ private:
   // 第一趟找到铁片后的声光提示 + 滞空时长（题目发挥要求："找到滞空3s+声光提示"）
   double survey_signal_hold_sec_;   // 占比帧够即开声光，悬停此时长后关声光再飞下一柱
 
-  // 下降 / 抓取 / 叠放（z 全是面阵目标读数；抓取/放置用 R=ARM_GROUND_AREA_CM 参照）
-  double mid_clearance_cm_;   // （已废弃，抓取改用分段下降；保留声明避免参数报错）
-  double descend_seg_len_cm_;       // 分段下降：每个中停段下降量（默认 30）
-  double descend_min_tail_cm_;      // 分段下降：最后盲降段下限，剩余 < seg+tail 不再分段（默认 20）
-  double descend_recenter_timeout_sec_; // 中停二次对准超时（防卡死，默认 2.5）
-  double descend_abort_area_cm_; // 下降安全底线：面阵读数 < 此值(臂尖将到地面以下=不可能)立即中止下降爬回重试（默认22≈R-5）
-  double descend_seg_len_min_plate_cm_; // 抓最小片时用更短分段（默认20），放置不加密
-  double grab_press_cm_;      // 抓取下压量：z = R + 柱高 − grab_press（压住铁片确保吸牢）
-  double drop_gap_cm_;        // （放置已改"上方释放"，不再使用；保留避免参数报错）
-  double drop_press_cm_;      // （放置已改"上方释放"，不再使用；保留避免参数报错）
+  // 下降 / 抓取 / 叠放
+  double grab_align_height_cm_; // 抓取：先下降到距柱顶此高度并精对
+  double grab_pick_height_cm_;  // 抓取：最终下降到距柱顶此高度后伸臂吸取
+  double grab_height_tol_cm_;   // 抓取柱顶距离控制的 z 到位容差
   double drop_release_clearance_cm_;   // 放置末段不贴死：z = R + 空柱高 + 已叠 + 此余隙（叠面上方释放）
-  double drop_post_release_hover_sec_; // 放置松磁后原地悬停时长（防机体惯性带偏），取代旧 drop_settle 语义
-  double grab_final_dy_cm_;   // 抓取末段盲降额外 y 偏置（放置不用）
+  double drop_post_release_hover_sec_; // 放置松磁后原地悬停时长（防机体惯性带偏）
   double drop_final_dy_cm_;    // 放置末段额外 y 偏置：补电磁铁吸取点物理偏置，防铁片偏左滚落（与 grab 同向，map +y=画面左）
   double drop_final_dx_cm_;    // 放置末段额外 x 偏置（map +x=画面正上方）：放置专用，正值往前补
-  // 抓取下降模式 A/B：segmented=分段中停二次对准；direct_after_center=对准中心后直接盲降到位（不分段）
-  std::string grab_descend_mode_;
   double arm_extend_sec_;     // 放置时机械臂伸直到位耗时
-  double drop_settle_sec_;    // （放置已改用 drop_post_release_hover_sec；保留避免参数报错）
   double hover_grab_sec_;
   double plate_thickness_cm_;        // 每片铁片厚度，用于叠放时逐层抬高落点
-  bool   skip_largest_grab_visual_align_; // 最大铁片抓取不做视觉微调，避免过正导致气动抖动
   double empty_pillar_side_cm_;           // 空柱大柱边长，用于限制视觉 anchor 相对点云中心的最大可信修正
   bool   drop_visual_anchor_enable_;      // 空柱放置：视觉确认后记录/复用真实放置 anchor
   double drop_anchor_max_correction_cm_;  // 首次 anchor 相对点云空柱坐标的最大允许修正
@@ -341,16 +326,10 @@ private:
   std::size_t pickup_iter_;
   PickupSub   pickup_sub_;
   int         stack_count_ = 0;                // 已叠到空柱上的铁片数
-  bool        carrying_plate_ = false;
   int         pickup_attempts_ = 0;
   bool        pickup_observed_plate_ = false;
   int         pickup_observed_plate_frames_ = 0;
-  double      pickup_live_height_cm_ = 0.0;
-  bool        has_pickup_live_height_ = false;
 
-  // 抓取分段下降：中停读数表（从高到低）+ 当前段索引
-  std::vector<double> descend_checkpoints_;
-  std::size_t         descend_ckpt_idx_ = 0;
   bool                descend_is_drop_ = false;
   bool                drop_released_ = false;
 
@@ -386,6 +365,8 @@ private:
   double area_height_cm_;
   bool   has_point_height_;
   double point_height_cm_;
+  bool   has_pillar_top_distance_;
+  double pillar_top_distance_cm_;
 
   // 目标重发
   PickupWaypoint last_target_{};
@@ -402,6 +383,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr                route_choice_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr                servo_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr                electromagnet_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr                height_control_mode_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr                buzzer_led_pub_;
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr                mission_complete_pub_;
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr                pickup_done_pub_;
@@ -409,6 +391,7 @@ private:
 
   rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr             area_height_sub_;
   rclcpp::Subscription<std_msgs::msg::Int16>::SharedPtr             point_height_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr           pillar_top_distance_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr pillars_sub_;
   rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr   fine_data_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr           circle_ratio_sub_;
