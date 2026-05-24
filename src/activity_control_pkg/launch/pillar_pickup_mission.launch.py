@@ -16,10 +16,10 @@ def generate_launch_description():
     return LaunchDescription([
         # ===== 常调：到点/高度容差 =====
         DeclareLaunchArgument(
-            "position_tolerance_cm", default_value="9.0",
+            "position_tolerance_cm", default_value="12.0",
             description="地图航点到达 XY 容差(cm)，越小越准但更容易卡住"),
         DeclareLaunchArgument(
-            "height_tolerance_cm", default_value="8.0",
+            "height_tolerance_cm", default_value="10.0",
             description="普通地面高度模式到达容差(cm)，巡航/放置/降落使用"),
 
         # ===== 常调：视觉对准判定 =====
@@ -44,10 +44,10 @@ def generate_launch_description():
 
         # ===== 常调：航行/降落高度 =====
         DeclareLaunchArgument(
-            "pillar_visit_height_cm", default_value="140.0",
+            "pillar_visit_height_cm", default_value="130.0",
             description="第二趟到柱子上方的巡航高度(cm)，使用地面高度控制"),
         DeclareLaunchArgument(
-            "land_align_height_cm", default_value="140.0",
+            "land_align_height_cm", default_value="130.0",
             description="降落前视觉对准起停区 B 的高度(cm)，要能看全黑框"),
         DeclareLaunchArgument(
             "land_recenter_drop_cm", default_value="60.0",
@@ -67,7 +67,7 @@ def generate_launch_description():
             "grab_hold_sec", default_value="1.0",
             description="严格到达抓取高度后停留时间(s)，默认停 1 秒"),
         DeclareLaunchArgument(
-            "grab_final_timeout_sec", default_value="5.0",
+            "grab_final_timeout_sec", default_value="8.0",
             description="38cm 视觉精对通过后，最终下降抓取+停留的最大总时长(s)，超时立刻收臂上升判断"),
         DeclareLaunchArgument(
             "grab_check_height_cm", default_value="40.0",
@@ -95,7 +95,7 @@ def generate_launch_description():
 
         # ===== 常调：抓取结果确认 =====
         DeclareLaunchArgument(
-            "pickup_check_observe_sec", default_value="1.0",
+            "pickup_check_observe_sec", default_value="0.5",
             description="抓完爬升后观察铁片是否还在柱上的时间(s)"),
         DeclareLaunchArgument(
             "pickup_observe_plate_frames_required", default_value="2",
