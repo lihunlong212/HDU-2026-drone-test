@@ -78,8 +78,9 @@ enum class PickupSub
   CENTER,           // 视觉对准铁片中心（接管，xy 精对）
   DESCEND_MID,      // 视觉接管 + 用柱顶距离下降到抓取预对准高度
   RECENTER_MID,     // 在柱顶上方预对准高度精确对准（连续命中后进入最终下降）
-  DESCEND_FINAL,    // 视觉接管 + 用柱顶距离下降到抓取高度
-  CLIMB_BACK,       // 爬回巡航高度
+  DESCEND_FINAL,    // 视觉接管 + 抓取用地面高度相对下降；放置用柱顶/叠面距离下降
+  HOVER_GRAB,       // 抓取地面高度目标到达后停留
+  CLIMB_BACK,       // 抓完后爬到观察高度
   OBSERVE_GRAB,     // 观察 /circle_area_ratio 判抓取成败 / 重试
   GOTO_DROP,        // 飞到空柱上方
   CENTER_DROP,      // 视觉对准空柱边框中心（接管，仅 xy 精对）
@@ -200,8 +201,10 @@ private:
 
   // 下降 / 抓取 / 叠放
   double grab_align_height_cm_; // 抓取：先下降到距柱顶此高度并精对
-  double grab_pick_height_cm_;  // 抓取：最终下降到距柱顶此高度后伸臂吸取
   double grab_height_tol_cm_;   // 抓取柱顶距离控制的 z 到位容差
+  double grab_descend_delta_cm_; // 抓取：38cm 精对后改用地面高度相对下降这么多
+  double grab_hold_sec_;        // 抓取高度严格到达后停留时间
+  double grab_check_height_cm_; // 抓完后上升到距柱顶此高度观察是否抓取成功
   double drop_align_height_cm_; // 放置：先下降到距柱顶/叠面此高度并精对
   double drop_release_clearance_cm_;   // 放置末段不贴死：距当前柱顶/叠面此高度释放
   double drop_post_release_hover_sec_; // 放置松磁后原地悬停时长（防机体惯性带偏）
@@ -267,6 +270,8 @@ private:
 
   bool                descend_is_drop_ = false;
   bool                drop_released_ = false;
+  double              grab_ground_start_height_cm_ = 0.0;
+  double              grab_ground_target_height_cm_ = 0.0;
 
   // 子阶段目标（内存驻留，供重发）
   PickupWaypoint sub_target_;

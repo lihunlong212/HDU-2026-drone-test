@@ -58,11 +58,17 @@ def generate_launch_description():
             "grab_align_height_cm", default_value="38.0",
             description="到柱子航点后，切柱顶距离控制并先下降到距柱顶高度(cm)做精对"),
         DeclareLaunchArgument(
-            "grab_pick_height_cm", default_value="13.0",
-            description="精对连续满足后，继续下降到距柱顶高度(cm)伸臂吸取"),
+            "grab_descend_delta_cm", default_value="26.0",
+            description="38cm 精对后切地面高度控制，相对当前地面高度下降的距离(cm)"),
         DeclareLaunchArgument(
             "grab_height_tolerance_cm", default_value="4.0",
-            description="抓取阶段柱顶距离高度容差(cm)，用于 30cm/10cm 到位判断"),
+            description="抓取/放置预对准高度容差(cm)；最终抓取下降不使用该容差"),
+        DeclareLaunchArgument(
+            "grab_hold_sec", default_value="1.0",
+            description="严格到达抓取高度后停留时间(s)，默认停 1 秒"),
+        DeclareLaunchArgument(
+            "grab_check_height_cm", default_value="40.0",
+            description="抓取后上升到距柱顶高度(cm)观察是否抓取成功，不回巡航高度"),
 
         # ===== 常调：放置/机械臂时序 =====
         DeclareLaunchArgument(
@@ -153,12 +159,14 @@ def generate_launch_description():
                 # 空柱（占比不够）不触发声光。
                 "survey_signal_hold_sec": 2.0,
 
-                # 下降 / 抓取 / 叠放：抓取和放置下降都切到柱顶/叠面距离控制。
-                "grab_align_height_cm": p("grab_align_height_cm"),
-                "grab_pick_height_cm": p("grab_pick_height_cm"),
-                "grab_height_tolerance_cm": p("grab_height_tolerance_cm"),
-                "drop_align_height_cm": p("drop_align_height_cm"),
+                # 抓取：先用柱顶距离到 grab_align_height_cm 精对，再切地面高度相对下降 grab_descend_delta_cm。
                 # 放置：先在 drop_align_height_cm 精对，再全程视觉接管下降到 drop_release_clearance_cm 投递。
+                "grab_align_height_cm": p("grab_align_height_cm"),
+                "grab_height_tolerance_cm": p("grab_height_tolerance_cm"),
+                "grab_descend_delta_cm": p("grab_descend_delta_cm"),
+                "grab_hold_sec": p("grab_hold_sec"),
+                "grab_check_height_cm": p("grab_check_height_cm"),
+                "drop_align_height_cm": p("drop_align_height_cm"),
                 # 伸臂→松磁→悬停 drop_post_release_hover_sec→收臂。避免贴近接触摩擦/下压/惯性把片带歪。
                 "drop_release_clearance_cm": p("drop_release_clearance_cm"),
                 "drop_post_release_hover_sec": p("drop_post_release_hover_sec"),
@@ -183,7 +191,7 @@ def generate_launch_description():
                 # traverse_only_mode=true → 只跑第一趟读占比，然后降落，不抓取。
                 "traverse_only_mode": False,
 
-                # 抓取观察 + 重试：CLIMB_BACK 到位后悬停 N 秒看 /circle_area_ratio 是否仍非 NaN，
+                # 抓取观察 + 重试：抓完只爬到 grab_check_height_cm 后观察 N 秒，看 /circle_area_ratio 是否仍非 NaN，
                 # 仍能识别出铁片即视为抓取失败，最多重试 pickup_max_attempts 次
                 "pickup_check_observe_sec": p("pickup_check_observe_sec"),
                 # OBSERVE 期间连续 N 帧还能看到真黑圆盘，才判抓取失败；NaN/空柱不累计。

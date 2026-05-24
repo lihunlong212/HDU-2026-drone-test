@@ -45,8 +45,10 @@ def generate_launch_description():
     land_align_height_cm = LaunchConfiguration("land_align_height_cm")
     land_recenter_drop_cm = LaunchConfiguration("land_recenter_drop_cm")
     grab_align_height_cm = LaunchConfiguration("grab_align_height_cm")
-    grab_pick_height_cm = LaunchConfiguration("grab_pick_height_cm")
     grab_height_tolerance_cm = LaunchConfiguration("grab_height_tolerance_cm")
+    grab_descend_delta_cm = LaunchConfiguration("grab_descend_delta_cm")
+    grab_hold_sec = LaunchConfiguration("grab_hold_sec")
+    grab_check_height_cm = LaunchConfiguration("grab_check_height_cm")
     drop_final_dy_cm = LaunchConfiguration("drop_final_dy_cm")
     drop_final_dx_cm = LaunchConfiguration("drop_final_dx_cm")
     drop_align_height_cm = LaunchConfiguration("drop_align_height_cm")
@@ -111,8 +113,10 @@ def generate_launch_description():
             "land_align_height_cm": land_align_height_cm,
             "land_recenter_drop_cm": land_recenter_drop_cm,
             "grab_align_height_cm": grab_align_height_cm,
-            "grab_pick_height_cm": grab_pick_height_cm,
             "grab_height_tolerance_cm": grab_height_tolerance_cm,
+            "grab_descend_delta_cm": grab_descend_delta_cm,
+            "grab_hold_sec": grab_hold_sec,
+            "grab_check_height_cm": grab_check_height_cm,
             "drop_final_dy_cm": drop_final_dy_cm,
             "drop_final_dx_cm": drop_final_dx_cm,
             "drop_align_height_cm": drop_align_height_cm,
@@ -173,7 +177,7 @@ def generate_launch_description():
             "camera_height", default_value="480",
             description="相机采集高度(px)，需和摄像头支持的分辨率一致"),
         DeclareLaunchArgument(
-            "camera_fps", default_value="30",
+            "camera_fps", default_value="15",
             description="相机采集帧率，过高会增加 CPU 压力"),
         DeclareLaunchArgument(
             "process_fps", default_value="15.0",
@@ -248,11 +252,17 @@ def generate_launch_description():
             "grab_align_height_cm", default_value="38.0",
             description="到柱子航点后，切柱顶距离控制并先下降到距柱顶高度(cm)做精对"),
         DeclareLaunchArgument(
-            "grab_pick_height_cm", default_value="13.0",
-            description="精对连续满足后，继续下降到距柱顶高度(cm)伸臂吸取"),
+            "grab_descend_delta_cm", default_value="26.0",
+            description="38cm 精对后切地面高度控制，相对当前地面高度下降的距离(cm)"),
         DeclareLaunchArgument(
             "grab_height_tolerance_cm", default_value="4.0",
-            description="抓取阶段柱顶距离高度容差(cm)，用于 30cm/10cm 到位判断"),
+            description="抓取/放置预对准高度容差(cm)；最终抓取下降不使用该容差"),
+        DeclareLaunchArgument(
+            "grab_hold_sec", default_value="1.0",
+            description="严格到达抓取高度后停留时间(s)，默认停 1 秒"),
+        DeclareLaunchArgument(
+            "grab_check_height_cm", default_value="40.0",
+            description="抓取后上升到距柱顶高度(cm)观察是否抓取成功，不回巡航高度"),
 
         # ===== 放置 / 机械臂 / 重试参数 =====
         DeclareLaunchArgument(

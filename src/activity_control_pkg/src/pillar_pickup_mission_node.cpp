@@ -72,9 +72,11 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
 
   survey_signal_hold_sec_ = declare_parameter("survey_signal_hold_sec", 3.0);
 
-  grab_align_height_cm_         = declare_parameter("grab_align_height_cm",         30.0);
-  grab_pick_height_cm_          = declare_parameter("grab_pick_height_cm",          10.0);
-  grab_height_tol_cm_           = declare_parameter("grab_height_tolerance_cm",      3.0);
+  grab_align_height_cm_         = declare_parameter("grab_align_height_cm",         38.0);
+  grab_height_tol_cm_           = declare_parameter("grab_height_tolerance_cm",      4.0);
+  grab_descend_delta_cm_        = declare_parameter("grab_descend_delta_cm",        26.0);
+  grab_hold_sec_                = declare_parameter("grab_hold_sec",                 1.0);
+  grab_check_height_cm_         = declare_parameter("grab_check_height_cm",         40.0);
   drop_align_height_cm_        = declare_parameter("drop_align_height_cm",        40.0);
   drop_release_clearance_cm_   = declare_parameter("drop_release_clearance_cm",   16.0); // 放置投递高度
   drop_post_release_hover_sec_ = declare_parameter("drop_post_release_hover_sec",  1.0); // 放置松磁后悬停
@@ -369,11 +371,23 @@ bool PillarPickupMissionNode::isReached(const PickupWaypoint & wp, double x_cm, 
   const double dyaw = std::fabs(normalizeAngleDeg(wp.yaw_deg - yaw_deg));
 
   const bool xy_ok  = dxy <= pos_tol_cm_;
+  if (phase_ == MissionPhase::PICKUP && !descend_is_drop_ &&
+      pickup_sub_ == PickupSub::DESCEND_FINAL) {
+    // 抓取最终下降用地面高度相对下降，不吃高度容差：必须到目标读数或更低。
+    return z_cm <= wp.z_cm;
+  }
+  if (phase_ == MissionPhase::PICKUP && !descend_is_drop_ &&
+      pickup_sub_ == PickupSub::CLIMB_BACK) {
+    // 抓完后只爬到距柱顶观察高度，不回巡航高度。
+    return z_cm >= wp.z_cm;
+  }
   const bool grab_height_phase =
     phase_ == MissionPhase::PICKUP &&
     (pickup_sub_ == PickupSub::DESCEND_MID ||
      pickup_sub_ == PickupSub::RECENTER_MID ||
-     pickup_sub_ == PickupSub::DESCEND_FINAL);
+     pickup_sub_ == PickupSub::DESCEND_FINAL ||
+     pickup_sub_ == PickupSub::HOVER_GRAB ||
+     pickup_sub_ == PickupSub::CLIMB_BACK);
   const bool z_ok   = dz  <= (grab_height_phase ? grab_height_tol_cm_ : height_tol_cm_);
   const bool yaw_ok = dyaw <= yaw_tol_deg_;
 
@@ -1013,17 +1027,29 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
     }
     case PickupSub::DESCEND_FINAL: {
       if (!descend_is_drop_) {
-        publishHeightControlMode(true);
+        if (!has_area_height_) {
+          RCLCPP_WARN(get_logger(),
+            "[铁片 %zu/%zu] 抓取最终下降开始时还没有 /laser_array/ground_height，使用 0cm 作为保护目标",
+            pickup_iter_ + 1, pickup_order_.size());
+        }
+        grab_ground_start_height_cm_ = has_area_height_ ? area_height_cm_ : 0.0;
+        grab_ground_target_height_cm_ =
+          std::max(0.0, grab_ground_start_height_cm_ - grab_descend_delta_cm_);
+        publishHeightControlMode(false);
         publishVisualTakeover(true);
-        // 30cm 精对通过后，最终下降到 10cm 的途中就提前吸磁并伸臂。
-        // 这样接近铁片时机械臂/电磁铁已经处于抓取状态，不等 10cm 到位后才动作。
+        // 预对准通过后，最终下降途中提前吸磁并伸臂。
+        // 机械臂伸出会影响 min_range，所以抓取最终下降改用地面高度相对下降。
         publishMagnet(true);
         publishServo(true);
+        RCLCPP_INFO(get_logger(),
+          "[铁片 %zu/%zu] 抓取最终下降: ground_start=%.1fcm, delta=%.1fcm, target=%.1fcm",
+          pickup_iter_ + 1, pickup_order_.size(),
+          grab_ground_start_height_cm_, grab_descend_delta_cm_, grab_ground_target_height_cm_);
       }
-      // 抓取/放置末段都用距柱顶/叠面距离；不再使用柱子绝对高度。
+      // 放置末段用距柱顶/叠面距离；抓取末段用地面高度相对下降。
       const double z_final = descend_is_drop_
         ? drop_release_clearance_cm_
-        : grab_pick_height_cm_;
+        : grab_ground_target_height_cm_;
       double tx = px, ty = py;
       if (descend_is_drop_) {
         publishHeightControlMode(true);
@@ -1041,10 +1067,20 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
       publishTarget(sub_target_);
       break;
     }
-    case PickupSub::CLIMB_BACK: {
+    case PickupSub::HOVER_GRAB: {
+      sub_hover_start_ = now();
+      republish_enabled_ = false;
       publishHeightControlMode(false);
+      publishVisualTakeover(true);
+      RCLCPP_INFO(get_logger(),
+        "[铁片 %zu/%zu] HOVER_GRAB: 已到地面高度目标 %.1fcm，停留 %.1fs",
+        pickup_iter_ + 1, pickup_order_.size(), grab_ground_target_height_cm_, grab_hold_sec_);
+      break;
+    }
+    case PickupSub::CLIMB_BACK: {
+      publishHeightControlMode(true);
       publishVisualTakeover(false);
-      sub_target_ = PickupWaypoint{px, py, pillar_visit_height_cm_, 0.0, 0.0, "climb_back"};
+      sub_target_ = PickupWaypoint{px, py, grab_check_height_cm_, 0.0, 0.0, "climb_to_check_height"};
       republish_enabled_ = true;
       publishTarget(sub_target_);
       break;
@@ -1149,10 +1185,15 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
         if (descend_is_drop_) {
           enterPickupSub(PickupSub::HOVER_DROP);
         } else {
-          publishServo(false);   // 已经在下降途中伸臂吸取；到抓取高度立刻收臂爬升
-          ++pickup_attempts_;
-          enterPickupSub(PickupSub::CLIMB_BACK);
+          enterPickupSub(PickupSub::HOVER_GRAB);
         }
+      }
+      break;
+    case PickupSub::HOVER_GRAB:
+      if ((now() - sub_hover_start_).seconds() >= grab_hold_sec_) {
+        publishServo(false);   // 电磁铁保持吸住，收臂后只爬到观察高度
+        ++pickup_attempts_;
+        enterPickupSub(PickupSub::CLIMB_BACK);
       }
       break;
     case PickupSub::CLIMB_BACK:
@@ -1260,7 +1301,8 @@ void PillarPickupMissionNode::monitorTimerCallback()
     phase_ == MissionPhase::PICKUP &&
     (pickup_sub_ == PickupSub::DESCEND_MID ||
      pickup_sub_ == PickupSub::RECENTER_MID ||
-     pickup_sub_ == PickupSub::DESCEND_FINAL ||
+     (pickup_sub_ == PickupSub::DESCEND_FINAL && descend_is_drop_) ||
+     pickup_sub_ == PickupSub::CLIMB_BACK ||
      pickup_sub_ == PickupSub::HOVER_DROP);
   const double z_cm = (pickup_uses_pillar_height && has_pillar_top_distance_)
     ? pillar_top_distance_cm_
