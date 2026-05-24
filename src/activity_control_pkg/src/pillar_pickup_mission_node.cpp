@@ -76,6 +76,7 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   grab_height_tol_cm_           = declare_parameter("grab_height_tolerance_cm",      4.0);
   grab_descend_delta_cm_        = declare_parameter("grab_descend_delta_cm",        26.0);
   grab_hold_sec_                = declare_parameter("grab_hold_sec",                 1.0);
+  grab_final_timeout_sec_       = declare_parameter("grab_final_timeout_sec",        5.0);
   grab_check_height_cm_         = declare_parameter("grab_check_height_cm",         40.0);
   drop_align_height_cm_        = declare_parameter("drop_align_height_cm",        38.0);
   drop_release_clearance_cm_   = declare_parameter("drop_release_clearance_cm",   25.0); // 放置投递高度
@@ -1034,6 +1035,7 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
         grab_ground_start_height_cm_ = has_area_height_ ? area_height_cm_ : 0.0;
         grab_ground_target_height_cm_ =
           std::max(0.0, grab_ground_start_height_cm_ - grab_descend_delta_cm_);
+        grab_final_start_time_ = now();
         publishHeightControlMode(false);
         publishVisualTakeover(true);
         // 预对准通过后，最终下降途中提前吸磁并伸臂。
@@ -1187,6 +1189,16 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
       break;
     }
     case PickupSub::DESCEND_FINAL:
+      if (!descend_is_drop_ && grab_final_timeout_sec_ > 0.0 &&
+          (now() - grab_final_start_time_).seconds() >= grab_final_timeout_sec_) {
+        RCLCPP_WARN(get_logger(),
+          "[pickup %zu/%zu] grab final timeout %.1fs, retract servo and climb to check",
+          pickup_iter_ + 1, pickup_order_.size(), grab_final_timeout_sec_);
+        publishServo(false);
+        ++pickup_attempts_;
+        enterPickupSub(PickupSub::CLIMB_BACK);
+        break;
+      }
       if (isReached(sub_target_, x_cm, y_cm, z_cm, 0.0)) {
         if (descend_is_drop_) {
           enterPickupSub(PickupSub::HOVER_DROP);
@@ -1196,7 +1208,15 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
       }
       break;
     case PickupSub::HOVER_GRAB:
-      if ((now() - sub_hover_start_).seconds() >= grab_hold_sec_) {
+      if ((grab_final_timeout_sec_ > 0.0 &&
+           (now() - grab_final_start_time_).seconds() >= grab_final_timeout_sec_) ||
+          (now() - sub_hover_start_).seconds() >= grab_hold_sec_) {
+        if (grab_final_timeout_sec_ > 0.0 &&
+            (now() - grab_final_start_time_).seconds() >= grab_final_timeout_sec_) {
+          RCLCPP_WARN(get_logger(),
+            "[pickup %zu/%zu] grab final timeout %.1fs during hold, retract servo and climb to check",
+            pickup_iter_ + 1, pickup_order_.size(), grab_final_timeout_sec_);
+        }
         publishServo(false);   // 电磁铁保持吸住，收臂后只爬到观察高度
         ++pickup_attempts_;
         enterPickupSub(PickupSub::CLIMB_BACK);

@@ -67,6 +67,9 @@ def generate_launch_description():
             "grab_hold_sec", default_value="1.0",
             description="严格到达抓取高度后停留时间(s)，默认停 1 秒"),
         DeclareLaunchArgument(
+            "grab_final_timeout_sec", default_value="5.0",
+            description="38cm 视觉精对通过后，最终下降抓取+停留的最大总时长(s)，超时立刻收臂上升判断"),
+        DeclareLaunchArgument(
             "grab_check_height_cm", default_value="40.0",
             description="抓取后上升到距柱顶高度(cm)观察是否抓取成功，不回巡航高度"),
 
@@ -162,6 +165,7 @@ def generate_launch_description():
                 "grab_height_tolerance_cm": p("grab_height_tolerance_cm"),
                 "grab_descend_delta_cm": p("grab_descend_delta_cm"),
                 "grab_hold_sec": p("grab_hold_sec"),
+                "grab_final_timeout_sec": p("grab_final_timeout_sec"),
                 "grab_check_height_cm": p("grab_check_height_cm"),
                 "drop_align_height_cm": p("drop_align_height_cm"),
                 "drop_release_clearance_cm": p("drop_release_clearance_cm"),

@@ -204,6 +204,7 @@ private:
   double grab_height_tol_cm_;   // 抓取柱顶距离控制的 z 到位容差
   double grab_descend_delta_cm_; // 抓取：38cm 精对后改用地面高度相对下降这么多
   double grab_hold_sec_;        // 抓取高度严格到达后停留时间
+  double grab_final_timeout_sec_; // 抓取最终下降+吸取的最大允许时间
   double grab_check_height_cm_; // 抓完后上升到距柱顶此高度观察是否抓取成功
   double drop_align_height_cm_; // 放置：先下降到距柱顶/叠面此高度并精对
   double drop_release_clearance_cm_;   // 放置末段不贴死：距当前柱顶/叠面此高度释放
@@ -271,6 +272,7 @@ private:
   bool                drop_released_ = false;
   double              grab_ground_start_height_cm_ = 0.0;
   double              grab_ground_target_height_cm_ = 0.0;
+  rclcpp::Time        grab_final_start_time_;
 
   // 子阶段目标（内存驻留，供重发）
   PickupWaypoint sub_target_;
