@@ -33,8 +33,8 @@ def generate_launch_description():
             "visual_pixel_tol_px", default_value="60",
             description="视觉认为已对准的像素容差(px)，抓取要求连续满足多帧"),
         DeclareLaunchArgument(
-            "visual_align_required_hits", default_value="3",
-            description="视觉误差进入容差后需要连续满足的帧数，抓取精对默认 3 帧"),
+            "visual_align_required_hits", default_value="2",
+            description="视觉误差进入容差后需要连续满足的帧数，默认 2 帧以加快对准"),
         DeclareLaunchArgument(
             "visual_jump_px", default_value="100",
             description="视觉中心单帧跳变过滤阈值(px)，误检跳太大时丢弃该帧"),
@@ -89,6 +89,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "arm_extend_sec", default_value="1.2",
             description="放置时伸臂到位等待时间(s)，到位后才松电磁铁"),
+        DeclareLaunchArgument(
+            "drop_magnet_delay_sec", default_value="1.0",
+            description="投放到 25cm 后先下机械臂，延迟这么久(s)再关闭电磁铁"),
 
         # ===== 常调：抓取结果确认 =====
         DeclareLaunchArgument(
@@ -175,8 +178,10 @@ def generate_launch_description():
                 # 放置末段额外 x 偏置(cm)：map +x=画面正上方，正值往前补。放置专用，抓取不加。
                 # 可命令行覆盖：drop_final_dx_cm:=4.0
                 "drop_final_dx_cm": ParameterValue(drop_final_dx_cm, value_type=float),
-                # 放置释放时序：到达 drop_release_clearance_cm 立刻伸臂并关磁，等待 arm_extend_sec 后收臂。
+                # 放置释放时序：到达 drop_release_clearance_cm 立刻伸臂，延迟 drop_magnet_delay_sec 后关磁。
+                # 收臂等待 max(arm_extend_sec, drop_magnet_delay_sec)，避免未松磁就收臂。
                 "arm_extend_sec": p("arm_extend_sec"),
+                "drop_magnet_delay_sec": p("drop_magnet_delay_sec"),
 
                 # 空柱放置 anchor：视觉确认后记录当前实际位置，后续下降/叠放复用。
                 # 首次允许最多约 24cm 修正（覆盖 32cm 大空柱半边长 16cm + 飞行误差），

@@ -211,6 +211,7 @@ private:
   double drop_final_dy_cm_;    // 放置末段额外 y 偏置：补电磁铁吸取点物理偏置，防铁片偏左滚落（与 grab 同向，map +y=画面左）
   double drop_final_dx_cm_;    // 放置末段额外 x 偏置（map +x=画面正上方）：放置专用，正值往前补
   double arm_extend_sec_;     // 放置时机械臂伸直到位耗时
+  double drop_magnet_delay_sec_; // 放置到位后先放舵机，延迟这么久再松磁
   double empty_pillar_side_cm_;           // 空柱大柱边长，用于限制视觉 anchor 相对点云中心的最大可信修正
   bool   drop_visual_anchor_enable_;      // 空柱放置：视觉确认后记录/复用真实放置 anchor
   double drop_anchor_max_correction_cm_;  // 首次 anchor 相对点云空柱坐标的最大允许修正

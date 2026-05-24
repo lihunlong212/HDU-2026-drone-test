@@ -55,6 +55,7 @@ def generate_launch_description():
     drop_align_height_cm = LaunchConfiguration("drop_align_height_cm")
     drop_release_clearance_cm = LaunchConfiguration("drop_release_clearance_cm")
     arm_extend_sec = LaunchConfiguration("arm_extend_sec")
+    drop_magnet_delay_sec = LaunchConfiguration("drop_magnet_delay_sec")
     pickup_check_observe_sec = LaunchConfiguration("pickup_check_observe_sec")
     pickup_observe_plate_frames_required = LaunchConfiguration("pickup_observe_plate_frames_required")
     pickup_max_attempts = LaunchConfiguration("pickup_max_attempts")
@@ -123,6 +124,7 @@ def generate_launch_description():
             "drop_align_height_cm": drop_align_height_cm,
             "drop_release_clearance_cm": drop_release_clearance_cm,
             "arm_extend_sec": arm_extend_sec,
+            "drop_magnet_delay_sec": drop_magnet_delay_sec,
             "pickup_check_observe_sec": pickup_check_observe_sec,
             "pickup_observe_plate_frames_required": pickup_observe_plate_frames_required,
             "pickup_max_attempts": pickup_max_attempts,
@@ -197,7 +199,7 @@ def generate_launch_description():
             "pid_max_vertical_velocity", default_value="30.0",
             description="Z 轴最大速度(cm/s)，抓取下降太猛就调小"),
         DeclareLaunchArgument(
-            "visual_kp", default_value="0.03",
+            "visual_kp", default_value="0.04",
             description="视觉接管 XY 比例增益；越大修正越快，也越容易抖"),
         DeclareLaunchArgument(
             "visual_kd", default_value="0.003",
@@ -206,7 +208,7 @@ def generate_launch_description():
             "visual_pixel_deadzone", default_value="10.0",
             description="视觉接管像素死区(px)，误差小于该值时 XY 速度为 0"),
         DeclareLaunchArgument(
-            "visual_max_xy_velocity", default_value="6.0",
+            "visual_max_xy_velocity", default_value="8.0",
             description="视觉接管期间 XY 最大速度(cm/s)，抓取阶段建议小一点"),
         DeclareLaunchArgument(
             "visual_data_timeout_sec", default_value="0.4",
@@ -229,8 +231,8 @@ def generate_launch_description():
             "visual_pixel_tol_px", default_value="60",
             description="视觉认为已对准的像素容差(px)，抓取要求连续满足多帧"),
         DeclareLaunchArgument(
-            "visual_align_required_hits", default_value="3",
-            description="视觉误差进入容差后需要连续满足的帧数，抓取精对默认 3 帧"),
+            "visual_align_required_hits", default_value="2",
+            description="视觉误差进入容差后需要连续满足的帧数，默认 2 帧以加快对准"),
         DeclareLaunchArgument(
             "visual_jump_px", default_value="100",
             description="视觉中心单帧跳变过滤阈值(px)，误检跳太大时丢弃该帧"),
@@ -283,6 +285,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "arm_extend_sec", default_value="1.2",
             description="放置时伸臂到位等待时间(s)，到位后才松电磁铁"),
+        DeclareLaunchArgument(
+            "drop_magnet_delay_sec", default_value="1.0",
+            description="投放到 25cm 后先下机械臂，延迟这么久(s)再关闭电磁铁"),
         DeclareLaunchArgument(
             "pickup_check_observe_sec", default_value="1.0",
             description="抓完爬升后观察铁片是否还在柱上的时间(s)"),

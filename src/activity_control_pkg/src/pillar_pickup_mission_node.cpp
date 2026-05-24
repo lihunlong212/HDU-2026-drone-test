@@ -62,7 +62,7 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   visual_align1_timeout_sec_  = declare_parameter("visual_align1_timeout_sec", 4.0);
   visual_align2_timeout_sec_  = declare_parameter("visual_align2_timeout_sec", 1.5);
   visual_pixel_tol_           = declare_parameter("visual_pixel_tol_px",      15);
-  visual_align_required_hits_ = declare_parameter("visual_align_required_hits", 3);
+  visual_align_required_hits_ = declare_parameter("visual_align_required_hits", 2);
   visual_jump_px_             = declare_parameter("visual_jump_px",          100);
   visual_stale_sec_           = declare_parameter("visual_stale_sec",        0.4);
   arm_offset_dx_cm_ = declare_parameter("arm_offset_dx_cm", CAM_TO_ARM_DX_CM);
@@ -83,6 +83,7 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   drop_final_dy_cm_   = declare_parameter("drop_final_dy_cm",   -2.0);  // 放置末段 y 偏置（补吸取点偏置，防偏左滚落；偏左明显可加到 -6~-7）
   drop_final_dx_cm_   = declare_parameter("drop_final_dx_cm",    4.0);  // 放置末段 x 偏置（map +x=画面正上方，正值往前补）
   arm_extend_sec_     = declare_parameter("arm_extend_sec",      1.2);  // 放置伸臂到位耗时
+  drop_magnet_delay_sec_ = declare_parameter("drop_magnet_delay_sec", 1.0);
   empty_pillar_side_cm_           = declare_parameter("empty_pillar_side_cm", 32.0);
   drop_visual_anchor_enable_      = declare_parameter("drop_visual_anchor_enable",      true);
   drop_anchor_max_correction_cm_  = declare_parameter(
@@ -1122,12 +1123,12 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
     }
     case PickupSub::HOVER_DROP: {
       sub_hover_start_ = now();
-      drop_released_ = true;
+      drop_released_ = false;
       republish_enabled_ = false;
       RCLCPP_INFO(get_logger(),
-        "[pickup %zu/%zu] HOVER_DROP: reached %.1fcm, servo down and magnet off now, retract after %.1fs (stack=%d)",
+        "[pickup %zu/%zu] HOVER_DROP: reached %.1fcm, servo down now, magnet off after %.1fs, retract after %.1fs (stack=%d)",
         pickup_iter_ + 1, pickup_order_.size(), drop_release_clearance_cm_,
-        arm_extend_sec_, stack_count_);
+        drop_magnet_delay_sec_, std::max(arm_extend_sec_, drop_magnet_delay_sec_), stack_count_);
       /*
       RCLCPP_INFO(get_logger(),
         "[铁片 %zu/%zu] HOVER_DROP: 叠面上方%.1fcm → 伸臂 %.1fs → 松磁 → 悬停 %.1fs（已叠 %d 层）",
@@ -1135,7 +1136,6 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
         arm_extend_sec_, stack_count_);
       */
       publishServo(true);
-      publishMagnet(false);
       break;
     }
     case PickupSub::CLIMB_AFTER_DROP: {
@@ -1281,13 +1281,13 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
     }
     case PickupSub::HOVER_DROP: {
       const double elapsed = (now() - sub_hover_start_).seconds();
-      if (!drop_released_ && elapsed >= arm_extend_sec_) {
+      if (!drop_released_ && elapsed >= drop_magnet_delay_sec_) {
         publishMagnet(false);
         drop_released_ = true;
         RCLCPP_INFO(get_logger(),
           "[铁片 %zu/%zu] 放置伸臂到位，松磁释放", pickup_iter_ + 1, pickup_order_.size());
       }
-      if (elapsed >= arm_extend_sec_) {
+      if (elapsed >= std::max(arm_extend_sec_, drop_magnet_delay_sec_)) {
         publishServo(false);
         ++stack_count_;   // 这一片已叠上
         descend_is_drop_ = false;
