@@ -77,9 +77,8 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   grab_descend_delta_cm_        = declare_parameter("grab_descend_delta_cm",        26.0);
   grab_hold_sec_                = declare_parameter("grab_hold_sec",                 1.0);
   grab_check_height_cm_         = declare_parameter("grab_check_height_cm",         40.0);
-  drop_align_height_cm_        = declare_parameter("drop_align_height_cm",        40.0);
-  drop_release_clearance_cm_   = declare_parameter("drop_release_clearance_cm",   16.0); // 放置投递高度
-  drop_post_release_hover_sec_ = declare_parameter("drop_post_release_hover_sec",  1.0); // 放置松磁后悬停
+  drop_align_height_cm_        = declare_parameter("drop_align_height_cm",        38.0);
+  drop_release_clearance_cm_   = declare_parameter("drop_release_clearance_cm",   25.0); // 放置投递高度
   drop_final_dy_cm_   = declare_parameter("drop_final_dy_cm",   -2.0);  // 放置末段 y 偏置（补吸取点偏置，防偏左滚落；偏左明显可加到 -6~-7）
   drop_final_dx_cm_   = declare_parameter("drop_final_dx_cm",    4.0);  // 放置末段 x 偏置（map +x=画面正上方，正值往前补）
   arm_extend_sec_     = declare_parameter("arm_extend_sec",      1.2);  // 放置伸臂到位耗时
@@ -93,7 +92,7 @@ PillarPickupMissionNode::PillarPickupMissionNode(const rclcpp::NodeOptions & opt
   target_republish_period_sec_ = declare_parameter("target_republish_period_sec", 1.0);
 
   pickup_check_observe_sec_ = declare_parameter("pickup_check_observe_sec", 2.0);
-  pickup_max_attempts_      = declare_parameter("pickup_max_attempts",      3);
+  pickup_max_attempts_      = declare_parameter("pickup_max_attempts",      2);
   pickup_observe_plate_frames_required_ =
     declare_parameter("pickup_observe_plate_frames_required", 3);
 
@@ -1003,7 +1002,7 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
         tx, ty,
         descend_is_drop_ ? drop_align_height_cm_ : grab_align_height_cm_,
         0.0, 0.0,
-        descend_is_drop_ ? "drop_descend_to_40cm" : "descend_to_30cm"};
+        descend_is_drop_ ? "drop_descend_to_38cm" : "descend_to_38cm"};
       republish_enabled_ = true;
       publishTarget(sub_target_);
       break;
@@ -1019,7 +1018,7 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
         tx, ty,
         descend_is_drop_ ? drop_align_height_cm_ : grab_align_height_cm_,
         0.0, 0.0,
-        descend_is_drop_ ? "drop_recenter_at_40cm" : "recenter_at_30cm"};
+        descend_is_drop_ ? "drop_recenter_at_38cm" : "recenter_at_38cm"};
       publishTarget(sub_target_);
       republish_enabled_ = false;
       publishVisualTakeover(true);
@@ -1121,13 +1120,20 @@ void PillarPickupMissionNode::enterPickupSub(PickupSub s)
     }
     case PickupSub::HOVER_DROP: {
       sub_hover_start_ = now();
-      drop_released_ = false;
+      drop_released_ = true;
       republish_enabled_ = false;
+      RCLCPP_INFO(get_logger(),
+        "[pickup %zu/%zu] HOVER_DROP: reached %.1fcm, servo down and magnet off now, retract after %.1fs (stack=%d)",
+        pickup_iter_ + 1, pickup_order_.size(), drop_release_clearance_cm_,
+        arm_extend_sec_, stack_count_);
+      /*
       RCLCPP_INFO(get_logger(),
         "[铁片 %zu/%zu] HOVER_DROP: 叠面上方%.1fcm → 伸臂 %.1fs → 松磁 → 悬停 %.1fs（已叠 %d 层）",
         pickup_iter_ + 1, pickup_order_.size(), drop_release_clearance_cm_,
-        arm_extend_sec_, drop_post_release_hover_sec_, stack_count_);
+        arm_extend_sec_, stack_count_);
+      */
       publishServo(true);
+      publishMagnet(false);
       break;
     }
     case PickupSub::CLIMB_AFTER_DROP: {
@@ -1174,7 +1180,7 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
       // 预对准高度处要求视觉误差连续 visual_align_required_hits 帧小于容错，再进入最终下降。
       if (isVisuallyAligned()) {
         if (descend_is_drop_) {
-          updateDropAnchorFromVision(x_cm, y_cm, "drop_align_40cm");
+          updateDropAnchorFromVision(x_cm, y_cm, "drop_align_38cm");
         }
         enterPickupSub(PickupSub::DESCEND_FINAL);
       }
@@ -1261,7 +1267,7 @@ void PillarPickupMissionNode::stepPickup(double x_cm, double y_cm, double z_cm)
         RCLCPP_INFO(get_logger(),
           "[铁片 %zu/%zu] 放置伸臂到位，松磁释放", pickup_iter_ + 1, pickup_order_.size());
       }
-      if (elapsed >= arm_extend_sec_ + drop_post_release_hover_sec_) {
+      if (elapsed >= arm_extend_sec_) {
         publishServo(false);
         ++stack_count_;   // 这一片已叠上
         descend_is_drop_ = false;

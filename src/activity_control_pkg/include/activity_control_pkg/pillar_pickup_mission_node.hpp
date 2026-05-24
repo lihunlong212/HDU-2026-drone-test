@@ -84,7 +84,7 @@ enum class PickupSub
   OBSERVE_GRAB,     // 观察 /circle_area_ratio 判抓取成败 / 重试
   GOTO_DROP,        // 飞到空柱上方
   CENTER_DROP,      // 视觉对准空柱边框中心（接管，仅 xy 精对）
-  HOVER_DROP,       // 机械臂伸出 + 松磁，悬停
+  HOVER_DROP,       // 到释放高度后立即伸臂关磁，随后收臂
   CLIMB_AFTER_DROP  // 爬回巡航高度
 };
 
@@ -207,7 +207,6 @@ private:
   double grab_check_height_cm_; // 抓完后上升到距柱顶此高度观察是否抓取成功
   double drop_align_height_cm_; // 放置：先下降到距柱顶/叠面此高度并精对
   double drop_release_clearance_cm_;   // 放置末段不贴死：距当前柱顶/叠面此高度释放
-  double drop_post_release_hover_sec_; // 放置松磁后原地悬停时长（防机体惯性带偏）
   double drop_final_dy_cm_;    // 放置末段额外 y 偏置：补电磁铁吸取点物理偏置，防铁片偏左滚落（与 grab 同向，map +y=画面左）
   double drop_final_dx_cm_;    // 放置末段额外 x 偏置（map +x=画面正上方）：放置专用，正值往前补
   double arm_extend_sec_;     // 放置时机械臂伸直到位耗时

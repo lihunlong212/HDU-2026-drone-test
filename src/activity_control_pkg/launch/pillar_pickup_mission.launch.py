@@ -78,14 +78,11 @@ def generate_launch_description():
             "drop_final_dx_cm", default_value="4.0",
             description="放置末段 x 偏置(cm)，map +x=画面正上方，正值往前补"),
         DeclareLaunchArgument(
-            "drop_align_height_cm", default_value="40.0",
+            "drop_align_height_cm", default_value="38.0",
             description="放置时先下降到距柱顶/叠面高度(cm)做精确视觉对准"),
         DeclareLaunchArgument(
-            "drop_release_clearance_cm", default_value="16.0",
+            "drop_release_clearance_cm", default_value="25.0",
             description="放置投递高度(cm)，精对后保持视觉接管下降到此高度再投递"),
-        DeclareLaunchArgument(
-            "drop_post_release_hover_sec", default_value="1.0",
-            description="松磁后原地悬停时间(s)，等铁片稳定后再收臂"),
         DeclareLaunchArgument(
             "arm_extend_sec", default_value="1.2",
             description="放置时伸臂到位等待时间(s)，到位后才松电磁铁"),
@@ -98,7 +95,7 @@ def generate_launch_description():
             "pickup_observe_plate_frames_required", default_value="2",
             description="观察期间连续看到铁片多少帧才判定抓取失败并重试"),
         DeclareLaunchArgument(
-            "pickup_max_attempts", default_value="3",
+            "pickup_max_attempts", default_value="2",
             description="单个铁片最多抓取尝试次数"),
 
         Node(
@@ -167,16 +164,14 @@ def generate_launch_description():
                 "grab_hold_sec": p("grab_hold_sec"),
                 "grab_check_height_cm": p("grab_check_height_cm"),
                 "drop_align_height_cm": p("drop_align_height_cm"),
-                # 伸臂→松磁→悬停 drop_post_release_hover_sec→收臂。避免贴近接触摩擦/下压/惯性把片带歪。
                 "drop_release_clearance_cm": p("drop_release_clearance_cm"),
-                "drop_post_release_hover_sec": p("drop_post_release_hover_sec"),
                 # 放置末段额外 y 偏置(cm)：补电磁铁吸取点物理偏置，防铁片偏左(map+y)滚落。
                 # 与 grab 同向(负)。可命令行覆盖：drop_final_dy_cm:=-6.0
                 "drop_final_dy_cm": ParameterValue(drop_final_dy_cm, value_type=float),
                 # 放置末段额外 x 偏置(cm)：map +x=画面正上方，正值往前补。放置专用，抓取不加。
                 # 可命令行覆盖：drop_final_dx_cm:=4.0
                 "drop_final_dx_cm": ParameterValue(drop_final_dx_cm, value_type=float),
-                # 放置释放时序：先伸臂，等机械臂到位(arm_extend_sec)后松磁，再悬停(drop_post_release_hover_sec)收臂。
+                # 放置释放时序：到达 drop_release_clearance_cm 立刻伸臂并关磁，等待 arm_extend_sec 后收臂。
                 "arm_extend_sec": p("arm_extend_sec"),
 
                 # 空柱放置 anchor：视觉确认后记录当前实际位置，后续下降/叠放复用。
